@@ -9,7 +9,7 @@ from boloride.domain.exceptions import (
     LocationProviderError,
     LocationProviderTimeoutError,
 )
-from boloride.domain.models.location import LocationSearchContext
+from boloride.domain.models.location import LocationCandidate, LocationSearchContext
 from boloride.integrations.maps.ola_maps import OlaMapsProvider
 
 
@@ -84,4 +84,48 @@ async def test_ola_normalizes_http_failure(httpx_mock) -> None:
     provider = OlaMapsProvider(make_settings())
     with pytest.raises(LocationProviderError, match="status 503"):
         await provider.search_location("Kota")
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ola_enriches_missing_structured_types_from_place_details(
+    httpx_mock,
+) -> None:
+    httpx_mock.add_response(
+        url="https://api.olamaps.io/places/v1/details?place_id=ola-airport&api_key=test-key",
+        json={"result": {"types": ["airport", "point_of_interest"]}},
+    )
+    provider = OlaMapsProvider(make_settings())
+    candidate = LocationCandidate(
+        "Airport words are not evidence",
+        "Some address",
+        Decimal("25.18"),
+        Decimal("75.83"),
+        "ola",
+        "ola-airport",
+    )
+
+    enriched = await provider.enrich_candidate(candidate)
+
+    assert enriched.place_types == ("airport", "point_of_interest")
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ola_missing_type_evidence_remains_unknown(httpx_mock) -> None:
+    httpx_mock.add_response(json={"result": {"name": "Airport in display only"}})
+    provider = OlaMapsProvider(make_settings())
+    candidate = LocationCandidate(
+        "Airport in display only",
+        "Airport Road",
+        Decimal("25.18"),
+        Decimal("75.83"),
+        "ola",
+        "place-1",
+    )
+
+    enriched = await provider.enrich_candidate(candidate)
+
+    assert enriched.place_types is None
+    assert enriched.airport_classification.value == "unknown"
     await provider.aclose()

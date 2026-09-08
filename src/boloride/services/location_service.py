@@ -83,8 +83,15 @@ class LocationService:
 			)
 		return candidates
 
-	def resolve_candidate(self, candidate: LocationCandidate) -> ResolvedLocation:
-		return candidate.to_resolved_location()
+	async def resolve_candidate(self, candidate: LocationCandidate) -> ResolvedLocation:
+		provider = self._router.get_provider()
+		enriched = await provider.enrich_candidate(candidate)
+		return enriched.to_resolved_location()
+
+	async def get_route(
+		self, origin: ResolvedLocation, destination: ResolvedLocation
+	):
+		return await self._router.get_route(origin, destination)
 
 	def resolve(self, location: LocationSchema) -> ResolvedLocation:
 		if location.provider_place_id and not location.provider:

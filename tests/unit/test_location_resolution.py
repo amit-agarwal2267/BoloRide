@@ -158,6 +158,11 @@ async def test_location_service_normalizes_limits_and_preserves_candidates() -> 
             assert context.city == "Kota"
             return candidates
 
+        async def enrich_candidate(
+            self, candidate: LocationCandidate
+        ) -> LocationCandidate:
+            return candidate
+
     class Router:
         def get_provider(self) -> Provider:
             return Provider()

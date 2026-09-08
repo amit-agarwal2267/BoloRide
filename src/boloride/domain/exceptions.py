@@ -20,3 +20,7 @@ class LocationNotFoundError(LocationProviderError):
 
 class LocationConfigurationError(LocationProviderError):
     """The selected location provider is not configured or implemented."""
+
+
+class RouteProviderError(DomainValidationError):
+    """Configured routing providers failed to return authoritative route facts."""

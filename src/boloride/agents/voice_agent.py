@@ -142,7 +142,9 @@ class BoloRideAgent(Agent):
         candidates = self.ride_context.location_candidates
         if not 1 <= candidate_number <= len(candidates):
             return "Invalid candidate number. Search again or ask the caller to choose."
-        location = self._locations.resolve_candidate(candidates[candidate_number - 1])
+        location = await self._locations.resolve_candidate(
+            candidates[candidate_number - 1]
+        )
         self._set_location(role, location)
         self.ride_context.clear_location_candidates()
         return f"Selected {role}: {location.display_name or location.address}. {self._state_summary()}"
