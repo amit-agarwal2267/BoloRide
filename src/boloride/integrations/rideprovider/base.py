@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
@@ -21,8 +20,6 @@ class RideBookingRequest:
 class RideBookingResult:
 	provider: str
 	provider_booking_id: str
-	fare_amount: Decimal
-	fare_currency: str
 	driver_name: str
 	vehicle_description: str
 

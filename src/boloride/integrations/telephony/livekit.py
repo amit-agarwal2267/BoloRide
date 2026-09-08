@@ -18,11 +18,14 @@ from boloride.llm.router import create_llm_router
 from boloride.observability.logger import configure_logging
 from boloride.prompts.registry import PromptKey, PromptRegistry
 from boloride.repositories.ride_repository import RideRepository
+from boloride.repositories.pricing_rule_repository import PricingRuleRepository
 from boloride.repositories.saved_place_repository import SavedPlaceRepository
 from boloride.repositories.user_repository import UserRepository
 from boloride.repositories.vehicle_type_repository import VehicleTypeRepository
 from boloride.services.booking_service import BookingService
 from boloride.services.location_service import LocationService
+from boloride.services.pricing_service import PricingService
+from boloride.services.quote_service import QuoteService
 from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.user_service import UserService
 from boloride.services.vehicle_service import VehicleService
@@ -62,6 +65,7 @@ async def entrypoint(ctx: JobContext) -> None:
     maps_router = MapsRouter(settings)
 
     async def shutdown() -> None:
+        quotes.disconnect(ride_context)
         trace.update(metadata={"success": True})
         trace_manager.__exit__(None, None, None)
         await maps_router.aclose()
@@ -69,8 +73,6 @@ async def entrypoint(ctx: JobContext) -> None:
         await database_session.close()
         await engine.dispose()
         langfuse.shutdown()
-
-    ctx.add_shutdown_callback(shutdown)
 
     users = UserRepository(database_session)
     identity = await UserService(users).resolve_returning_customer(
@@ -93,12 +95,20 @@ async def entrypoint(ctx: JobContext) -> None:
         default_country=settings.default_country,
         default_language=settings.default_language,
     )
+    quotes = QuoteService(
+        PricingService(PricingRuleRepository(database_session)), locations
+    )
     prompt = PromptRegistry(
         langfuse,
         label=settings.langfuse_prompt_label,
         fallback_enabled=settings.prompt_fallback_enabled,
     ).get(PromptKey.VOICE_AGENT)
-    ride_context = RideContext(session_id=session_id, caller_id=user_id)
+    ride_context = RideContext(
+        session_id=session_id,
+        caller_id=user_id,
+        identity_state=identity.state,
+        verified_customer_id=user_id,
+    )
     agent = BoloRideAgent(
         base_prompt=prompt.content,
         context=ride_context,
@@ -107,13 +117,15 @@ async def entrypoint(ctx: JobContext) -> None:
         locations=locations,
         saved_places=saved_places,
         rides=rides,
-        booking=BookingService(rides, MockRideProvider(), vehicles),
+        booking=BookingService(rides, MockRideProvider(), vehicles, quotes),
+        quotes=quotes,
         tracer=tracer,
         default_city=settings.default_city,
         default_state=settings.default_state,
         default_country=settings.default_country,
         timezone=settings.default_timezone,
     )
+    ctx.add_shutdown_callback(shutdown)
     session = AgentSession(
         stt=STTRouter(settings).get_provider().get_livekit_stt(),
         llm=BoloRideLiveKitLLM(llm_router, session_id=session_id),

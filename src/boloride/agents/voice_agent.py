@@ -15,6 +15,7 @@ from boloride.integrations.langfuse.tracing import LangfuseTracer
 from boloride.repositories.ride_repository import RideRepository
 from boloride.services.booking_service import BookingService
 from boloride.services.location_service import LocationService
+from boloride.services.quote_service import QuoteService
 from boloride.services.saved_place_service import SavedPlaceService
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class BoloRideAgent(Agent):
         saved_places: SavedPlaceService,
         rides: RideRepository,
         booking: BookingService,
+        quotes: QuoteService,
         tracer: LangfuseTracer,
         default_city: str | None,
         default_state: str | None,
@@ -47,6 +49,7 @@ class BoloRideAgent(Agent):
         self._saved_places = saved_places
         self._rides = rides
         self._booking = booking
+        self._quotes = quotes
         self._tracer = tracer
         self._default_city = default_city
         self._default_state = default_state
@@ -180,10 +183,35 @@ class BoloRideAgent(Agent):
     @function_tool
     async def record_booking_confirmation(self, explicitly_confirmed: bool) -> str:
         """Record the caller's explicit yes/no response to the final ride summary."""
-        self.ride_context.user_confirmed = explicitly_confirmed
         if explicitly_confirmed:
+            if self.ride_context.current_quote is None:
+                return "No current fare quote is available to confirm."
+            self._quotes.confirm_quote(
+                self.ride_context, self.ride_context.current_quote.id
+            )
             return "Explicit confirmation recorded. The booking may now be created."
+        self.ride_context.confirmed_quote_id = None
+        self.ride_context.user_confirmed = False
         return "Confirmation declined. Do not create the booking."
+
+    @function_tool
+    async def create_fare_quote(self) -> str:
+        """Create a backend-computed estimated fare for the current ride request."""
+        try:
+            quote = await self._quotes.create_quote(self.ride_context)
+        except DomainValidationError as exc:
+            return f"Fare quote unavailable: {exc}."
+        pricing = quote.pricing
+        toll_note = (
+            " Tolls may be excluded and the final ride fare may vary."
+            if pricing.toll_status.value in {"may_apply", "unknown"}
+            else ""
+        )
+        return (
+            f"Estimated fare: {pricing.currency} {pricing.estimated_total:.0f}. "
+            f"This estimate is valid for 20 minutes and requires explicit confirmation."
+            f"{toll_note}"
+        )
 
     @function_tool
     async def create_booking(self) -> str:
@@ -225,7 +253,8 @@ class BoloRideAgent(Agent):
         return (
             f"Booking successful. ID {result.provider_booking_id}. "
             f"Driver {result.driver_name}; vehicle {result.vehicle_description}; "
-            f"fare {result.fare_currency} {result.fare_amount}."
+            f"accepted estimated fare {outcome.accepted_quote.pricing.currency} "
+            f"{outcome.accepted_quote.pricing.estimated_total:.0f}."
         )
 
     def _set_location(

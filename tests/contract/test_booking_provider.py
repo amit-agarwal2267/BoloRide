@@ -26,6 +26,6 @@ async def test_mock_provider_returns_provider_neutral_booking_result() -> None:
 
     assert result.provider == "mock"
     assert result.provider_booking_id.startswith("mock-")
-    assert result.fare_currency == "INR"
+    assert not hasattr(result, "fare_amount")
     assert result.driver_name
     assert result.vehicle_description

@@ -3,7 +3,9 @@ from datetime import datetime
 from uuid import UUID
 
 from boloride.domain.models.location import LocationCandidate, ResolvedLocation
+from boloride.domain.models.quote import Quote
 from boloride.domain.models.vehicle import PassengerCountSource
+from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.policies import CustomerIdentityState
 
 
@@ -24,6 +26,9 @@ class RideContext:
 	user_confirmed: bool = False
 	booking_id: UUID | None = None
 	booking_confirmed: bool = False
+	current_quote: Quote | None = None
+	confirmed_quote_id: UUID | None = None
+	session_active: bool = True
 	clarification_required: bool = False
 	location_candidates: tuple[LocationCandidate, ...] = ()
 
@@ -40,25 +45,49 @@ class RideContext:
 
 	@property
 	def confirmation_received(self) -> bool:
-		return self.user_confirmed or self.booking_confirmed
+		return (
+			self.user_confirmed
+			and self.current_quote is not None
+			and self.confirmed_quote_id == self.current_quote.id
+		)
+
+	def _invalidate_quote(self) -> None:
+		self.current_quote = None
+		self.confirmed_quote_id = None
+		self.user_confirmed = False
+		self.booking_confirmed = False
+
+	def set_quote(self, quote: Quote) -> None:
+		if not self.session_active or quote.session_id != self.session_id:
+			raise DomainValidationError("quote must belong to the active session")
+		self.current_quote = quote
+		self.confirmed_quote_id = None
+		self.user_confirmed = False
+
+	def confirm_quote(self, quote_id: UUID) -> None:
+		if not self.session_active or self.current_quote is None or self.current_quote.id != quote_id:
+			raise DomainValidationError("only the current session quote can be confirmed")
+		self.confirmed_quote_id = quote_id
+		self.user_confirmed = True
+
+	def disconnect(self) -> None:
+		self.session_active = False
+		self._invalidate_quote()
 
 	def update_pickup(self, pickup: ResolvedLocation | None) -> None:
 		if self.pickup != pickup:
 			self.pickup = pickup
-			self.user_confirmed = False
-			self.booking_confirmed = False
+			self._invalidate_quote()
 
 	def update_destination(self, destination: ResolvedLocation | None) -> None:
 		if self.destination != destination:
 			self.destination = destination
-			self.user_confirmed = False
-			self.booking_confirmed = False
+			self._invalidate_quote()
 
 	def update_ride_time(self, ride_time: datetime | None) -> None:
 		if self.ride_time != ride_time:
 			self.ride_time = ride_time
-			self.user_confirmed = False
-			self.booking_confirmed = False
+			self._invalidate_quote()
 
 	def update_passenger_count(
 		self,
@@ -69,19 +98,16 @@ class RideContext:
 	) -> None:
 		if self.passenger_count != passenger_count:
 			self.passenger_count = passenger_count
-			self.user_confirmed = False
-			self.booking_confirmed = False
+			self._invalidate_quote()
 		self.passenger_count_source = source
 		if not selected_vehicle_is_eligible:
 			self.selected_vehicle_type_code = None
-			self.user_confirmed = False
-			self.booking_confirmed = False
+			self._invalidate_quote()
 
 	def update_selected_vehicle_type(self, code: str | None) -> None:
 		if self.selected_vehicle_type_code != code:
 			self.selected_vehicle_type_code = code
-			self.user_confirmed = False
-			self.booking_confirmed = False
+			self._invalidate_quote()
 
 	def set_location_candidates(self, candidates: list[LocationCandidate]) -> None:
 		self.location_candidates = tuple(candidates)

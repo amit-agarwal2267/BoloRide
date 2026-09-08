@@ -1,15 +1,16 @@
 from datetime import UTC, datetime
-from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from boloride.db.models.ride import Ride
+from boloride.db.models.accepted_quote import AcceptedQuote
 from boloride.domain.enums import RideStatus
 from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.location import ResolvedLocation
 from boloride.domain.models.ride import validate_ride_transition
+from boloride.domain.models.quote import FareComponentType, Quote
 
 
 class RideRepository:
@@ -26,8 +27,7 @@ class RideRepository:
         *,
         provider: str,
         provider_booking_id: str,
-        fare_amount: Decimal,
-        fare_currency: str,
+        accepted_quote: Quote,
     ) -> Ride:
         if pickup.latitude == destination.latitude and pickup.longitude == destination.longitude:
             raise DomainValidationError("pickup and destination must differ")
@@ -36,10 +36,10 @@ class RideRepository:
 
         normalized_provider = provider.strip().casefold()
         normalized_booking_id = provider_booking_id.strip()
-        normalized_currency = fare_currency.strip().upper()
+        normalized_currency = accepted_quote.pricing.currency.strip().upper()
         if not normalized_provider or not normalized_booking_id:
             raise DomainValidationError("provider booking details cannot be blank")
-        if fare_amount <= 0:
+        if accepted_quote.pricing.estimated_total <= 0:
             raise DomainValidationError("fare amount must be positive")
         if len(normalized_currency) != 3 or not normalized_currency.isalpha():
             raise DomainValidationError("fare currency must be a three-letter code")
@@ -66,10 +66,37 @@ class RideRepository:
             provider=normalized_provider,
             provider_booking_id=normalized_booking_id,
             booked_at=now,
-            fare_amount=fare_amount,
+            fare_amount=accepted_quote.pricing.estimated_total,
             fare_currency=normalized_currency,
         )
         self._session.add(ride)
+        await self._session.flush()
+        pricing = accepted_quote.pricing
+        toll = next(
+            (item.amount for item in pricing.components if item.component_type is FareComponentType.TOLL_ESTIMATE),
+            None,
+        )
+        self._session.add(
+            AcceptedQuote(
+                ride_id=ride.id,
+                pricing_rule_id=pricing.pricing_rule_id,
+                vehicle_type_code=pricing.vehicle_type_code,
+                session_id=accepted_quote.session_id,
+                route_provider=pricing.route_provider,
+                route_distance_meters=pricing.route_distance_meters,
+                route_duration_seconds=pricing.route_duration_seconds,
+                base_fare=pricing.component(FareComponentType.BASE_FARE),
+                distance_fare=pricing.component(FareComponentType.DISTANCE_FARE),
+                night_charge=pricing.component(FareComponentType.NIGHT_CHARGE),
+                airport_fee=pricing.component(FareComponentType.AIRPORT_FEE),
+                toll_estimate=toll,
+                toll_status=pricing.toll_status.value,
+                estimated_total=pricing.estimated_total,
+                currency=normalized_currency,
+                quoted_at=accepted_quote.quoted_at,
+                request_fingerprint=accepted_quote.request_fingerprint,
+            )
+        )
         await self._session.flush()
         return ride
 

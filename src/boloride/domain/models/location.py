@@ -87,6 +87,7 @@ class ResolvedLocation:
     provider: str | None = None
     provider_place_id: str | None = None
     place_types: tuple[str, ...] | None = None
+    country: str | None = None
 
     def __post_init__(self) -> None:
         address = self.address.strip()
@@ -110,6 +111,8 @@ class ResolvedLocation:
         object.__setattr__(self, "provider", provider)
         object.__setattr__(self, "provider_place_id", provider_place_id)
         object.__setattr__(self, "place_types", _normalize_place_types(self.place_types))
+        country = " ".join(self.country.split()).casefold() if self.country else None
+        object.__setattr__(self, "country", country or None)
 
     @property
     def airport_classification(self) -> AirportClassification:
@@ -183,4 +186,5 @@ class LocationCandidate:
             provider=self.provider,
             provider_place_id=self.provider_place_id,
             place_types=self.place_types,
+            country=self.country,
         )
