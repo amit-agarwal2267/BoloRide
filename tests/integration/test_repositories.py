@@ -19,7 +19,7 @@ def location(address: str, latitude: str, longitude: str) -> ResolvedLocation:
 async def test_user_and_saved_place_repositories(db_session: AsyncSession) -> None:
     users = UserRepository(db_session)
     places = SavedPlaceRepository(db_session)
-    user = await users.create("98765 43210")
+    user = await users.create("98765 43210", "Test User", 30)
     home = await places.create(
         user.id, " HOME ", location("Original home address", "25.180000", "75.830000")
     )
@@ -31,7 +31,7 @@ async def test_user_and_saved_place_repositories(db_session: AsyncSession) -> No
 
 @pytest.mark.asyncio
 async def test_ride_repository_lifecycle(db_session: AsyncSession) -> None:
-    user = await UserRepository(db_session).create("9876543211")
+    user = await UserRepository(db_session).create("9876543211", "Test User", 30)
     rides = RideRepository(db_session)
     ride = await rides.create(
         user.id,
@@ -59,7 +59,7 @@ async def test_ride_repository_lifecycle(db_session: AsyncSession) -> None:
 
 @pytest.mark.asyncio
 async def test_ride_preserves_saved_place_snapshot(db_session: AsyncSession) -> None:
-    user = await UserRepository(db_session).create("9876543212")
+    user = await UserRepository(db_session).create("9876543212", "Test User", 30)
     places = SavedPlaceRepository(db_session)
     saved_place = await places.create(
         user.id, "home", location("Old home", "25.180000", "75.830000")
@@ -84,7 +84,7 @@ async def test_ride_preserves_saved_place_snapshot(db_session: AsyncSession) -> 
 async def test_location_provenance_is_optional_and_preserved(
     db_session: AsyncSession,
 ) -> None:
-    user = await UserRepository(db_session).create("9876543213")
+    user = await UserRepository(db_session).create("9876543213", "Test User", 30)
     source_location = ResolvedLocation(
         "Kota Junction, Kota",
         Decimal("25.223000"),

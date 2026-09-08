@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from boloride.db.models.ride import Ride
+from boloride.db.models.user import User
 from boloride.domain.enums import RideStatus
 from boloride.domain.models.location import ResolvedLocation
 from boloride.repositories.saved_place_repository import SavedPlaceRepository
@@ -15,14 +16,39 @@ from boloride.repositories.user_repository import UserRepository
 @pytest.mark.asyncio
 async def test_duplicate_normalized_phone_is_rejected(db_session: AsyncSession) -> None:
     repository = UserRepository(db_session)
-    await repository.create("9876543220")
+    await repository.create("9876543220", "First User", 30)
     with pytest.raises(IntegrityError):
-        await repository.create("+919876543220")
+        await repository.create("+919876543220", "Second User", 31)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "normalized_name", "age"),
+    [
+        ("\t", "valid name", 30),
+        ("Valid Name", "", 30),
+        ("Valid Name", "valid name", 0),
+        ("Valid Name", "valid name", 121),
+    ],
+)
+async def test_complete_customer_profile_constraints(
+    db_session: AsyncSession, name: str, normalized_name: str, age: int
+) -> None:
+    db_session.add(
+        User(
+            phone_number="+919876543225",
+            name=name,
+            normalized_name=normalized_name,
+            age=age,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
 
 
 @pytest.mark.asyncio
 async def test_duplicate_label_for_same_user_is_rejected(db_session: AsyncSession) -> None:
-    user = await UserRepository(db_session).create("9876543221")
+    user = await UserRepository(db_session).create("9876543221", "First User", 30)
     repository = SavedPlaceRepository(db_session)
     location = ResolvedLocation("Home", Decimal("25.18"), Decimal("75.83"))
     await repository.create(user.id, "Home", location)
@@ -33,8 +59,8 @@ async def test_duplicate_label_for_same_user_is_rejected(db_session: AsyncSessio
 @pytest.mark.asyncio
 async def test_same_label_is_allowed_for_different_users(db_session: AsyncSession) -> None:
     users = UserRepository(db_session)
-    first = await users.create("9876543222")
-    second = await users.create("9876543223")
+    first = await users.create("9876543222", "First User", 30)
+    second = await users.create("9876543223", "Second User", 31)
     places = SavedPlaceRepository(db_session)
     location = ResolvedLocation("Home", Decimal("25.18"), Decimal("75.83"))
     await places.create(first.id, "home", location)
@@ -43,7 +69,7 @@ async def test_same_label_is_allowed_for_different_users(db_session: AsyncSessio
 
 @pytest.mark.asyncio
 async def test_booked_status_requires_booking_fields(db_session: AsyncSession) -> None:
-    user = await UserRepository(db_session).create("9876543224")
+    user = await UserRepository(db_session).create("9876543224", "First User", 30)
     invalid_ride = Ride(
         user_id=user.id,
         pickup_address="Home",

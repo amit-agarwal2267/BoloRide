@@ -23,6 +23,7 @@ from boloride.repositories.user_repository import UserRepository
 from boloride.services.booking_service import BookingService
 from boloride.services.location_service import LocationService
 from boloride.services.saved_place_service import SavedPlaceService
+from boloride.services.user_service import UserService
 from boloride.speech.stt.router import STTRouter
 from boloride.speech.tts.router import TTSRouter
 
@@ -47,7 +48,6 @@ async def entrypoint(ctx: JobContext) -> None:
         raise RuntimeError(
             "DEVELOPMENT_CALLER_PHONE is required until participant identity is implemented"
         )
-
     session_id = ctx.job.id
     ctx.log_context_fields = {"session_id": session_id}
     engine = create_database_engine(settings)
@@ -71,10 +71,16 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.add_shutdown_callback(shutdown)
 
     users = UserRepository(database_session)
-    user = await users.get_by_phone(settings.development_caller_phone)
-    if user is None:
-        user = await users.create(settings.development_caller_phone)
-        await database_session.commit()
+    identity = await UserService(users).resolve_returning_customer(
+        settings.development_caller_phone,
+        provided_name=None,
+    )
+    if not identity.verified or identity.customer_id is None:
+        raise RuntimeError(
+            "LiveKit customer onboarding and phone-plus-name verification must be "
+            "integrated before persisted customer operations are enabled"
+        )
+    user_id = identity.customer_id
 
     rides = RideRepository(database_session)
     saved_places = SavedPlaceService(SavedPlaceRepository(database_session))
@@ -89,11 +95,11 @@ async def entrypoint(ctx: JobContext) -> None:
         label=settings.langfuse_prompt_label,
         fallback_enabled=settings.prompt_fallback_enabled,
     ).get(PromptKey.VOICE_AGENT)
-    ride_context = RideContext(session_id=session_id, caller_id=user.id)
+    ride_context = RideContext(session_id=session_id, caller_id=user_id)
     agent = BoloRideAgent(
         base_prompt=prompt.content,
         context=ride_context,
-        user_id=user.id,
+        user_id=user_id,
         database_session=database_session,
         locations=locations,
         saved_places=saved_places,
