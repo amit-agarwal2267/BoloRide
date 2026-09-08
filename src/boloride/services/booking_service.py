@@ -9,6 +9,7 @@ from boloride.integrations.rideprovider.base import (
 	RideProvider,
 )
 from boloride.repositories.ride_repository import RideRepository
+from boloride.services.vehicle_service import VehicleService
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,9 +19,15 @@ class BookingOutcome:
 
 
 class BookingService:
-	def __init__(self, rides: RideRepository, provider: RideProvider) -> None:
+	def __init__(
+		self,
+		rides: RideRepository,
+		provider: RideProvider,
+		vehicles: VehicleService,
+	) -> None:
 		self._rides = rides
 		self._provider = provider
+		self._vehicles = vehicles
 
 	async def book_ride(self, user_id: UUID, context: RideContext) -> BookingOutcome:
 		if context.pickup is None:
@@ -37,6 +44,12 @@ class BookingService:
 			raise DomainValidationError("location clarification is required")
 		if context.booking_id is not None:
 			raise DomainValidationError("ride has already been booked")
+		if context.selected_vehicle_type_code is None:
+			raise DomainValidationError("vehicle type must be selected before booking")
+		vehicle = await self._vehicles.require_eligible_vehicle_type(
+			context.selected_vehicle_type_code,
+			context.passenger_count,
+		)
 
 		request_id = uuid4()
 		provider_result = await self._provider.create_booking(
@@ -45,7 +58,8 @@ class BookingService:
 				pickup=context.pickup,
 				destination=context.destination,
 				requested_ride_at=context.ride_time,
-				ride_type=context.ride_type,
+				passenger_count=context.passenger_count,
+				vehicle_type_code=vehicle.code,
 			)
 		)
 		booked_ride = await self._rides.create_booked(

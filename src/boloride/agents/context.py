@@ -3,6 +3,7 @@ from datetime import datetime
 from uuid import UUID
 
 from boloride.domain.models.location import LocationCandidate, ResolvedLocation
+from boloride.domain.models.vehicle import PassengerCountSource
 from boloride.domain.policies import CustomerIdentityState
 
 
@@ -16,7 +17,9 @@ class RideContext:
 	pickup: ResolvedLocation | None = None
 	destination: ResolvedLocation | None = None
 	ride_time: datetime | None = None
-	ride_type: str = "standard"
+	passenger_count: int = 1
+	passenger_count_source: PassengerCountSource = PassengerCountSource.DEFAULT
+	selected_vehicle_type_code: str | None = None
 	selected_offer: str | None = None
 	user_confirmed: bool = False
 	booking_id: UUID | None = None
@@ -54,6 +57,29 @@ class RideContext:
 	def update_ride_time(self, ride_time: datetime | None) -> None:
 		if self.ride_time != ride_time:
 			self.ride_time = ride_time
+			self.user_confirmed = False
+			self.booking_confirmed = False
+
+	def update_passenger_count(
+		self,
+		passenger_count: int,
+		source: PassengerCountSource,
+		*,
+		selected_vehicle_is_eligible: bool,
+	) -> None:
+		if self.passenger_count != passenger_count:
+			self.passenger_count = passenger_count
+			self.user_confirmed = False
+			self.booking_confirmed = False
+		self.passenger_count_source = source
+		if not selected_vehicle_is_eligible:
+			self.selected_vehicle_type_code = None
+			self.user_confirmed = False
+			self.booking_confirmed = False
+
+	def update_selected_vehicle_type(self, code: str | None) -> None:
+		if self.selected_vehicle_type_code != code:
+			self.selected_vehicle_type_code = code
 			self.user_confirmed = False
 			self.booking_confirmed = False
 

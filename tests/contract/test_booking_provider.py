@@ -19,6 +19,8 @@ async def test_mock_provider_returns_provider_neutral_booking_result() -> None:
                 "Station", Decimal("25.22"), Decimal("75.88")
             ),
             requested_ride_at=datetime.now(UTC),
+            passenger_count=4,
+            vehicle_type_code="sedan",
         )
     )
 

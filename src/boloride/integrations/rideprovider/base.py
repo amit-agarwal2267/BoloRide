@@ -13,7 +13,8 @@ class RideBookingRequest:
 	pickup: ResolvedLocation
 	destination: ResolvedLocation
 	requested_ride_at: datetime
-	ride_type: str = "standard"
+	passenger_count: int
+	vehicle_type_code: str
 
 
 @dataclass(frozen=True, slots=True)

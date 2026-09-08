@@ -9,6 +9,7 @@ from boloride.agents.context import RideContext
 from boloride.domain.enums import RideStatus
 from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.location import ResolvedLocation
+from boloride.domain.models.vehicle import VehicleTypeDetails
 from boloride.integrations.rideprovider.base import RideBookingRequest, RideBookingResult
 from boloride.services.booking_service import BookingService
 
@@ -38,6 +39,20 @@ class RecordingProvider:
         )
 
 
+class RecordingVehicleService:
+    def __init__(self, *, failure: Exception | None = None) -> None:
+        self.calls: list[tuple[str, int]] = []
+        self.failure = failure
+
+    async def require_eligible_vehicle_type(
+        self, code: str, passenger_count: int
+    ) -> VehicleTypeDetails:
+        self.calls.append((code, passenger_count))
+        if self.failure is not None:
+            raise self.failure
+        return VehicleTypeDetails(code, "Sedan", 4, True)
+
+
 def ready_context() -> RideContext:
     return RideContext(
         session_id="session-1",
@@ -45,6 +60,8 @@ def ready_context() -> RideContext:
         pickup=ResolvedLocation("Home", Decimal("25.18"), Decimal("75.83")),
         destination=ResolvedLocation("Station", Decimal("25.22"), Decimal("75.88")),
         ride_time=datetime.now(UTC) + timedelta(hours=1),
+        passenger_count=4,
+        selected_vehicle_type_code="sedan",
         user_confirmed=True,
     )
 
@@ -53,7 +70,8 @@ def ready_context() -> RideContext:
 async def test_booking_requires_confirmation_before_provider_call() -> None:
     repository = RecordingRideRepository()
     provider = RecordingProvider()
-    service = BookingService(repository, provider)  # type: ignore[arg-type]
+    vehicles = RecordingVehicleService()
+    service = BookingService(repository, provider, vehicles)  # type: ignore[arg-type]
     context = ready_context()
     context.user_confirmed = False
 
@@ -62,19 +80,24 @@ async def test_booking_requires_confirmation_before_provider_call() -> None:
 
     assert repository.create_calls == []
     assert provider.calls == 0
+    assert vehicles.calls == []
 
 
 @pytest.mark.asyncio
 async def test_successful_provider_booking_is_persisted_directly_as_booked() -> None:
     repository = RecordingRideRepository()
     provider = RecordingProvider()
-    service = BookingService(repository, provider)  # type: ignore[arg-type]
+    vehicles = RecordingVehicleService()
+    service = BookingService(repository, provider, vehicles)  # type: ignore[arg-type]
     customer_id = uuid4()
     context = ready_context()
 
     outcome = await service.book_ride(customer_id, context)
 
     assert provider.calls == 1
+    assert vehicles.calls == [("sedan", 4)]
+    assert provider.requests[0].passenger_count == 4
+    assert provider.requests[0].vehicle_type_code == "sedan"
     assert len(repository.create_calls) == 1
     args, kwargs = repository.create_calls[0]
     assert isinstance(args[0], UUID)
@@ -95,9 +118,28 @@ async def test_successful_provider_booking_is_persisted_directly_as_booked() -> 
 async def test_provider_failure_does_not_create_a_durable_ride() -> None:
     repository = RecordingRideRepository()
     provider = RecordingProvider(failure=RuntimeError("provider unavailable"))
-    service = BookingService(repository, provider)  # type: ignore[arg-type]
+    vehicles = RecordingVehicleService()
+    service = BookingService(repository, provider, vehicles)  # type: ignore[arg-type]
 
     with pytest.raises(RuntimeError, match="provider unavailable"):
         await service.book_ride(uuid4(), ready_context())
 
+    assert repository.create_calls == []
+
+
+@pytest.mark.asyncio
+async def test_capacity_invalid_vehicle_is_rejected_before_provider_call() -> None:
+    repository = RecordingRideRepository()
+    provider = RecordingProvider()
+    vehicles = RecordingVehicleService(
+        failure=DomainValidationError(
+            "selected vehicle type cannot accommodate the passenger count"
+        )
+    )
+    service = BookingService(repository, provider, vehicles)  # type: ignore[arg-type]
+
+    with pytest.raises(DomainValidationError, match="cannot accommodate"):
+        await service.book_ride(uuid4(), ready_context())
+
+    assert provider.calls == 0
     assert repository.create_calls == []
