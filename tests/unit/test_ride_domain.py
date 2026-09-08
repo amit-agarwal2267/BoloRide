@@ -5,21 +5,39 @@ from boloride.domain.exceptions import InvalidRideTransitionError
 from boloride.domain.models.ride import validate_ride_transition
 
 
-def test_ride_lifecycle_allows_ordered_transitions() -> None:
-    validate_ride_transition(RideStatus.REQUESTED, RideStatus.CONFIRMED)
-    validate_ride_transition(RideStatus.CONFIRMED, RideStatus.BOOKED)
+@pytest.mark.parametrize(
+    ("current", "requested"),
+    [
+        (RideStatus.BOOKED, RideStatus.ASSIGNED),
+        (RideStatus.BOOKED, RideStatus.CANCELLED),
+        (RideStatus.ASSIGNED, RideStatus.ON_TRIP),
+        (RideStatus.ASSIGNED, RideStatus.CANCELLED),
+        (RideStatus.ON_TRIP, RideStatus.COMPLETED),
+    ],
+)
+def test_ride_lifecycle_allows_only_canonical_transitions(
+    current: RideStatus, requested: RideStatus
+) -> None:
+    validate_ride_transition(current, requested)
 
 
 @pytest.mark.parametrize(
     ("current", "requested"),
     [
-        (RideStatus.REQUESTED, RideStatus.BOOKED),
-        (RideStatus.CONFIRMED, RideStatus.REQUESTED),
-        (RideStatus.BOOKED, RideStatus.CONFIRMED),
-        (RideStatus.REQUESTED, RideStatus.REQUESTED),
+        (current, requested)
+        for current in RideStatus
+        for requested in RideStatus
+        if (current, requested)
+        not in {
+            (RideStatus.BOOKED, RideStatus.ASSIGNED),
+            (RideStatus.BOOKED, RideStatus.CANCELLED),
+            (RideStatus.ASSIGNED, RideStatus.ON_TRIP),
+            (RideStatus.ASSIGNED, RideStatus.CANCELLED),
+            (RideStatus.ON_TRIP, RideStatus.COMPLETED),
+        }
     ],
 )
-def test_ride_lifecycle_rejects_invalid_transitions(
+def test_ride_lifecycle_rejects_every_other_transition(
     current: RideStatus, requested: RideStatus
 ) -> None:
     with pytest.raises(InvalidRideTransitionError):

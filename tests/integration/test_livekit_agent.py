@@ -59,7 +59,7 @@ def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
         database_session=database_session,
         locations=locations,
         saved_places=SimpleNamespace(list_places=AsyncMock(return_value=[])),
-        rides=SimpleNamespace(list_for_user=AsyncMock(return_value=[])),
+        rides=SimpleNamespace(list_for_customer=AsyncMock(return_value=[])),
         booking=ConfirmationGuard(),
         tracer=NullTracer(),  # type: ignore[arg-type]
         default_city="Kota",
