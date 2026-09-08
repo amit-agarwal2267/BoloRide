@@ -1,0 +1,43 @@
+[project]
+name = "boloride"
+version = "0.1.0"
+description = "Multilingual conversational ride-booking service"
+readme = "README.md"
+authors = [
+    { name = "aamit2267", email = "aamit2267@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.19.2",
+    "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
+    "google-genai>=2.22.0",
+    "groq>=1.7.0",
+    "httpx>=0.28.1",
+    "langfuse>=4,<5",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy>=2.0.52",
+    "uvicorn>=0.52.4",
+    "edge-tts>=7.0.0",
+    "livekit-agents[assemblyai,silero]~=1.6",
+    "av>=18.1.0",
+    "livekit-plugins-dtln>=0.1.5",
+]
+
+[project.scripts]
+boloride = "boloride:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-httpx>=0.30.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
