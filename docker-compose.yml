@@ -1,0 +1,125 @@
+services:
+  boloride:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: boloride-app
+
+    env_file:
+      - .env
+
+    ports:
+      - "${APP_PORT:-8000}:8000"
+
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./logs:/app/logs
+
+    depends_on:
+      livekit-server:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "uv",
+          "run",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    networks:
+      - boloride-network
+
+  voice-agent:
+    image: boloride-boloride
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["voice"]
+    environment:
+      - LIVEKIT_URL=ws://livekit-server:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+    command: ["uv", "run", "python", "-m", "boloride.integrations.telephony.livekit", "dev"]
+    depends_on:
+      livekit-server:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - boloride-network
+
+
+  postgres:
+    image: postgres:17-alpine
+
+    container_name: boloride-postgres
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-boloride}
+      POSTGRES_USER: ${POSTGRES_USER:-boloride}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-boloride} -d ${POSTGRES_DB:-boloride}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    restart: unless-stopped
+
+    networks:
+      - boloride-network
+
+  livekit-server:
+    image: livekit/livekit-server:latest
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - "/livekit-server --dev --bind 0.0.0.0 --keys=\"$$LIVEKIT_API_KEY: $$LIVEKIT_API_SECRET\""
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://livekit-server:7880/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - boloride-network
+
+
+volumes:
+  postgres_data:
+
+
+networks:
+  boloride-network:
+    name: boloride-network
+    driver: bridge

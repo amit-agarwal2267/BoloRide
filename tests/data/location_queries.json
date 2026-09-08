@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Kota railway station",
+    "city": "Kota",
+    "state": "Rajasthan",
+    "country": "IN",
+    "expected_name_keywords": ["Kota"],
+    "notes": "Station ambiguity benchmark"
+  },
+  {
+    "query": "Mahaveer Nagar 3 Kota",
+    "city": "Kota",
+    "state": "Rajasthan",
+    "country": "IN",
+    "expected_name_keywords": ["Mahaveer", "Kota"],
+    "notes": "Locality spelling benchmark"
+  },
+  {
+    "query": "MBS Hospital Kota",
+    "city": "Kota",
+    "state": "Rajasthan",
+    "country": "IN",
+    "expected_name_keywords": ["MBS", "Kota"],
+    "notes": "Named facility benchmark"
+  },
+  {
+    "query": "Allen Sankalp Kota",
+    "city": "Kota",
+    "state": "Rajasthan",
+    "country": "IN",
+    "expected_name_keywords": ["Allen", "Kota"],
+    "notes": "Education campus benchmark"
+  },
+  {
+    "query": "Jaipur Junction",
+    "city": "Jaipur",
+    "state": "Rajasthan",
+    "country": "IN",
+    "expected_name_keywords": ["Jaipur"],
+    "notes": "Cross-city station benchmark"
+  },
+  {
+    "query": "Hawa Mahal Jaipur",
+    "city": "Jaipur",
+    "state": "Rajasthan",
+    "country": "IN",
+    "expected_name_keywords": ["Hawa", "Jaipur"],
+    "notes": "Tourist landmark benchmark"
+  },
+  {
+    "query": "Bandra Terminus",
+    "city": "Mumbai",
+    "state": "Maharashtra",
+    "country": "IN",
+    "expected_name_keywords": ["Bandra"],
+    "notes": "Mumbai railway benchmark"
+  },
+  {
+    "query": "Howrah Bridge",
+    "city": "Kolkata",
+    "state": "West Bengal",
+    "country": "IN",
+    "expected_name_keywords": ["Howrah"],
+    "notes": "Landmark benchmark"
+  },
+  {
+    "query": "Kempegowda International Airport",
+    "city": "Bengaluru",
+    "state": "Karnataka",
+    "country": "IN",
+    "expected_name_keywords": ["Kempegowda", "Airport"],
+    "notes": "Airport benchmark"
+  },
+  {
+    "query": "Connaught Place New Delhi",
+    "city": "New Delhi",
+    "state": "Delhi",
+    "country": "IN",
+    "expected_name_keywords": ["Connaught", "Delhi"],
+    "notes": "Major urban district benchmark"
+  }
+]

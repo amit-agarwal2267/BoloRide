@@ -1,0 +1,45 @@
+# Python bytecode and packaging
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Tests, linters, type checkers, and coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit.xml
+
+# Runtime/provider artifacts
+logs/
+*.log
+.cache/
+.livekit/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local agent and IDE state
+.agents/
+.codex/
+.idea/
+.vscode/
+
+# OS metadata
+.DS_Store
