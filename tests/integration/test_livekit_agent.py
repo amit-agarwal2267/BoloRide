@@ -50,7 +50,9 @@ def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
                 ),
             ]
         ),
-        resolve_candidate=lambda candidate: candidate.to_resolved_location(),
+        resolve_candidate=AsyncMock(
+            side_effect=lambda candidate: candidate.to_resolved_location()
+        ),
     )
     agent = BoloRideAgent(
         base_prompt="You are BoloRide.",
