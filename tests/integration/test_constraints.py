@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -84,3 +85,23 @@ async def test_booked_status_requires_booking_fields(db_session: AsyncSession) -
     db_session.add(invalid_ride)
     with pytest.raises(IntegrityError):
         await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_invalid_ride_status_cannot_be_persisted(
+    db_session: AsyncSession,
+) -> None:
+    user = await UserRepository(db_session).create("9876543225", "First User", 30)
+    with pytest.raises(IntegrityError):
+        await db_session.execute(
+            text(
+                "INSERT INTO rides "
+                "(user_id, pickup_address, pickup_latitude, pickup_longitude, "
+                "destination_address, destination_latitude, destination_longitude, "
+                "requested_ride_at, status, confirmed_at, provider, "
+                "provider_booking_id, booked_at, fare_amount, fare_currency) VALUES "
+                "(:user_id, 'Home', 25.18, 75.83, 'Station', 25.22, 75.88, "
+                "now(), 'unknown', now(), 'mock', 'invalid-status', now(), 100, 'INR')"
+            ),
+            {"user_id": user.id},
+        )

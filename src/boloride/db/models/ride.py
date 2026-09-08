@@ -41,15 +41,9 @@ class Ride(Base):
             name="ck_rides_fare_pair",
         ),
         CheckConstraint(
-            "(status = 'requested' AND confirmed_at IS NULL AND provider IS NULL "
-            "AND provider_booking_id IS NULL AND booked_at IS NULL "
-            "AND fare_amount IS NULL AND fare_currency IS NULL) OR "
-            "(status = 'confirmed' AND confirmed_at IS NOT NULL AND provider IS NULL "
-            "AND provider_booking_id IS NULL AND booked_at IS NULL "
-            "AND fare_amount IS NULL AND fare_currency IS NULL) OR "
-            "(status = 'booked' AND confirmed_at IS NOT NULL AND provider IS NOT NULL "
+            "confirmed_at IS NOT NULL AND provider IS NOT NULL "
             "AND provider_booking_id IS NOT NULL AND booked_at IS NOT NULL "
-            "AND fare_amount IS NOT NULL AND fare_currency IS NOT NULL)",
+            "AND fare_amount IS NOT NULL AND fare_currency IS NOT NULL",
             name="ck_rides_status_fields",
         ),
     )
@@ -85,7 +79,7 @@ class Ride(Base):
             length=32,
         ),
         nullable=False,
-        default=RideStatus.REQUESTED,
+        default=RideStatus.BOOKED,
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider: Mapped[str | None] = mapped_column(String(50))

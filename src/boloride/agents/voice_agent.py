@@ -162,7 +162,7 @@ class BoloRideAgent(Agent):
     @function_tool
     async def get_previous_rides(self, limit: int = 3) -> str:
         """List a small number of this caller's latest rides."""
-        rides = await self._rides.list_for_user(
+        rides = await self._rides.list_for_customer(
             self._user_id, limit=max(1, min(limit, 5))
         )
         if not rides:

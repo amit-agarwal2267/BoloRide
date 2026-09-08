@@ -38,31 +38,27 @@ class BookingService:
 		if context.booking_id is not None:
 			raise DomainValidationError("ride has already been booked")
 
-		ride = await self._rides.create(
-			user_id,
-			context.pickup,
-			context.destination,
-			context.ride_time,
-		)
-		await self._rides.confirm(ride.id)
+		request_id = uuid4()
 		provider_result = await self._provider.create_booking(
 			RideBookingRequest(
-				request_id=ride.id or uuid4(),
+				request_id=request_id,
 				pickup=context.pickup,
 				destination=context.destination,
 				requested_ride_at=context.ride_time,
 				ride_type=context.ride_type,
 			)
 		)
-		booked_ride = await self._rides.mark_booked(
-			ride.id,
+		booked_ride = await self._rides.create_booked(
+			request_id,
+			user_id,
+			context.pickup,
+			context.destination,
+			context.ride_time,
 			provider=provider_result.provider,
 			provider_booking_id=provider_result.provider_booking_id,
 			fare_amount=provider_result.fare_amount,
 			fare_currency=provider_result.fare_currency,
 		)
-		if booked_ride is None:
-			raise DomainValidationError("ride disappeared during booking")
 		context.booking_id = booked_ride.id
 		context.booking_confirmed = True
 		return BookingOutcome(booked_ride, provider_result)
