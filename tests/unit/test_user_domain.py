@@ -1,7 +1,12 @@
 import pytest
 
 from boloride.domain.exceptions import DomainValidationError
-from boloride.domain.models.user import normalize_indian_phone_number, normalize_saved_place_label
+from boloride.domain.models.user import (
+    normalize_customer_age,
+    normalize_customer_name,
+    normalize_indian_phone_number,
+    normalize_saved_place_label,
+)
 
 
 @pytest.mark.parametrize(
@@ -25,3 +30,12 @@ def test_reject_invalid_indian_phone_number(raw: str) -> None:
 
 def test_normalize_saved_place_label() -> None:
     assert normalize_saved_place_label("  My   HOME ") == "my home"
+
+
+def test_normalize_customer_name() -> None:
+    assert normalize_customer_name("  Amit   AGARWAL ") == "amit agarwal"
+
+
+@pytest.mark.parametrize("age", [1, 120])
+def test_customer_age_accepts_data_integrity_bounds(age: int) -> None:
+    assert normalize_customer_age(age) == age

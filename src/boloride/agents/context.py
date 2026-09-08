@@ -3,12 +3,15 @@ from datetime import datetime
 from uuid import UUID
 
 from boloride.domain.models.location import LocationCandidate, ResolvedLocation
+from boloride.domain.policies import CustomerIdentityState
 
 
 @dataclass(slots=True)
 class RideContext:
 	session_id: str
-	caller_id: UUID
+	caller_id: UUID | None
+	identity_state: CustomerIdentityState | None = None
+	verified_customer_id: UUID | None = None
 	intent: str | None = None
 	pickup: ResolvedLocation | None = None
 	destination: ResolvedLocation | None = None
@@ -20,6 +23,17 @@ class RideContext:
 	booking_confirmed: bool = False
 	clarification_required: bool = False
 	location_candidates: tuple[LocationCandidate, ...] = ()
+
+	@property
+	def identity_verified(self) -> bool:
+		return (
+			self.identity_state
+			in {
+				CustomerIdentityState.ONBOARDED_NEW_CUSTOMER,
+				CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,
+			}
+			and self.verified_customer_id is not None
+		)
 
 	@property
 	def confirmation_received(self) -> bool:
