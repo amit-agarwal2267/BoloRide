@@ -20,10 +20,12 @@ from boloride.prompts.registry import PromptKey, PromptRegistry
 from boloride.repositories.ride_repository import RideRepository
 from boloride.repositories.saved_place_repository import SavedPlaceRepository
 from boloride.repositories.user_repository import UserRepository
+from boloride.repositories.vehicle_type_repository import VehicleTypeRepository
 from boloride.services.booking_service import BookingService
 from boloride.services.location_service import LocationService
 from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.user_service import UserService
+from boloride.services.vehicle_service import VehicleService
 from boloride.speech.stt.router import STTRouter
 from boloride.speech.tts.router import TTSRouter
 
@@ -83,6 +85,7 @@ async def entrypoint(ctx: JobContext) -> None:
     user_id = identity.customer_id
 
     rides = RideRepository(database_session)
+    vehicles = VehicleService(VehicleTypeRepository(database_session))
     saved_places = SavedPlaceService(SavedPlaceRepository(database_session))
     locations = LocationService(
         maps_router,
@@ -104,7 +107,7 @@ async def entrypoint(ctx: JobContext) -> None:
         locations=locations,
         saved_places=saved_places,
         rides=rides,
-        booking=BookingService(rides, MockRideProvider()),
+        booking=BookingService(rides, MockRideProvider(), vehicles),
         tracer=tracer,
         default_city=settings.default_city,
         default_state=settings.default_state,

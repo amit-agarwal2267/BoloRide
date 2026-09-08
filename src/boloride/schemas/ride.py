@@ -13,5 +13,6 @@ class RideBookingSchema(BaseModel):
 	pickup: LocationSchema
 	destination: LocationSchema
 	requested_ride_at: datetime
-	ride_type: str = "standard"
+	passenger_count: int = 1
+	selected_vehicle_type_code: str
 	confirmed: bool = False
