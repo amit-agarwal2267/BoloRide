@@ -3,10 +3,14 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from boloride.domain.enums import RideStatus
+from boloride.db.models.accepted_quote import AcceptedQuote
 from boloride.domain.models.location import ResolvedLocation
+from boloride.domain.models.location import TollStatus
+from boloride.domain.models.quote import FareComponent, FareComponentType, PricingResult, Quote
 from boloride.repositories.ride_repository import RideRepository
 from boloride.repositories.saved_place_repository import SavedPlaceRepository
 from boloride.repositories.user_repository import UserRepository
@@ -15,6 +19,21 @@ from boloride.services.ride_service import RideService
 
 def location(address: str, latitude: str, longitude: str) -> ResolvedLocation:
     return ResolvedLocation(address, Decimal(latitude), Decimal(longitude))
+
+
+def accepted_quote(amount: str = "200.00") -> Quote:
+    now = datetime.now(UTC)
+    components = (
+        FareComponent(FareComponentType.BASE_FARE, Decimal("50.00")),
+        FareComponent(FareComponentType.DISTANCE_FARE, Decimal(amount) - Decimal("50.00")),
+        FareComponent(FareComponentType.NIGHT_CHARGE, Decimal("0.00")),
+        FareComponent(FareComponentType.AIRPORT_FEE, Decimal("0.00")),
+    )
+    return Quote(
+        uuid4(), "repository-test", "b" * 64,
+        PricingResult(uuid4(), "sedan", 10000, 1000, "mock", components, TollStatus.UNKNOWN, Decimal(amount), "INR"),
+        now, now + timedelta(minutes=20),
+    )
 
 
 @pytest.mark.asyncio
@@ -43,8 +62,7 @@ async def test_ride_repository_lifecycle(db_session: AsyncSession) -> None:
         datetime.now(UTC) + timedelta(hours=1),
         provider=" MOCK ",
         provider_booking_id="booking-001",
-        fare_amount=Decimal("245.50"),
-        fare_currency="inr",
+        accepted_quote=accepted_quote("245.50"),
     )
 
     assert ride.status is RideStatus.BOOKED
@@ -52,6 +70,12 @@ async def test_ride_repository_lifecycle(db_session: AsyncSession) -> None:
     assert ride.confirmed_at is not None
     assert ride.provider == "mock"
     assert ride.fare_currency == "INR"
+    snapshot = await db_session.scalar(
+        select(AcceptedQuote).where(AcceptedQuote.ride_id == ride.id)
+    )
+    assert snapshot is not None
+    assert snapshot.estimated_total == Decimal("245.50")
+    assert snapshot.request_fingerprint == "b" * 64
 
     assigned = await rides.transition_internal(
         ride.id,
@@ -86,8 +110,7 @@ async def test_customer_scoped_ride_access_and_transition(
         datetime.now(UTC) + timedelta(hours=1),
         provider="mock",
         provider_booking_id="booking-owned",
-        fare_amount=Decimal("200"),
-        fare_currency="INR",
+        accepted_quote=accepted_quote(),
     )
 
     assert (await service.get_customer_ride(owner.id, ride.id)).id == ride.id
@@ -122,8 +145,7 @@ async def test_ride_preserves_saved_place_snapshot(db_session: AsyncSession) -> 
         datetime.now(UTC) + timedelta(hours=1),
         provider="mock",
         provider_booking_id="booking-snapshot",
-        fare_amount=Decimal("200"),
-        fare_currency="INR",
+        accepted_quote=accepted_quote(),
     )
 
     saved_place.address = "New home"
@@ -159,8 +181,7 @@ async def test_location_provenance_is_optional_and_preserved(
         datetime.now(UTC) + timedelta(hours=1),
         provider="mock",
         provider_booking_id="booking-provenance",
-        fare_amount=Decimal("200"),
-        fare_currency="INR",
+        accepted_quote=accepted_quote(),
     )
 
     assert saved_place.display_name == "Kota Junction"

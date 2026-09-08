@@ -10,12 +10,14 @@ from boloride.integrations.rideprovider.base import (
 )
 from boloride.repositories.ride_repository import RideRepository
 from boloride.services.vehicle_service import VehicleService
+from boloride.services.quote_service import QuoteService
 
 
 @dataclass(frozen=True, slots=True)
 class BookingOutcome:
 	ride: object
 	provider_result: RideBookingResult
+	accepted_quote: object
 
 
 class BookingService:
@@ -24,12 +26,16 @@ class BookingService:
 		rides: RideRepository,
 		provider: RideProvider,
 		vehicles: VehicleService,
+		quotes: QuoteService,
 	) -> None:
 		self._rides = rides
 		self._provider = provider
 		self._vehicles = vehicles
+		self._quotes = quotes
 
 	async def book_ride(self, user_id: UUID, context: RideContext) -> BookingOutcome:
+		if not context.identity_verified or context.verified_customer_id != user_id:
+			raise DomainValidationError("verified customer identity is required before booking")
 		if context.pickup is None:
 			raise DomainValidationError("pickup is required before booking")
 		if context.destination is None:
@@ -38,8 +44,6 @@ class BookingService:
 			raise DomainValidationError("ride time is required before booking")
 		if context.ride_time.tzinfo is None:
 			raise DomainValidationError("ride time must be timezone-aware")
-		if not context.confirmation_received:
-			raise DomainValidationError("explicit booking confirmation is required")
 		if context.clarification_required:
 			raise DomainValidationError("location clarification is required")
 		if context.booking_id is not None:
@@ -50,6 +54,7 @@ class BookingService:
 			context.selected_vehicle_type_code,
 			context.passenger_count,
 		)
+		accepted_quote = await self._quotes.require_bookable_quote(context)
 
 		request_id = uuid4()
 		provider_result = await self._provider.create_booking(
@@ -70,9 +75,8 @@ class BookingService:
 			context.ride_time,
 			provider=provider_result.provider,
 			provider_booking_id=provider_result.provider_booking_id,
-			fare_amount=provider_result.fare_amount,
-			fare_currency=provider_result.fare_currency,
+			accepted_quote=accepted_quote,
 		)
 		context.booking_id = booked_ride.id
 		context.booking_confirmed = True
-		return BookingOutcome(booked_ride, provider_result)
+		return BookingOutcome(booked_ride, provider_result, accepted_quote)
