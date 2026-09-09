@@ -11,6 +11,7 @@ from boloride.agents.context import RideContext
 from boloride.agents.voice_agent import BoloRideAgent
 from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.location import LocationCandidate
+from boloride.domain.policies import CustomerIdentityState
 from boloride.services.time_resolution_service import TimeResolutionService
 
 
@@ -28,7 +29,12 @@ class ConfirmationGuard:
 
 def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
     user_id = uuid4()
-    context = RideContext(session_id="voice-test", caller_id=user_id)
+    context = RideContext(
+        session_id="voice-test",
+        caller_id=user_id,
+        identity_state=CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,
+        verified_customer_id=user_id,
+    )
     database_session = AsyncMock()
     locations = SimpleNamespace(
         search_locations=AsyncMock(

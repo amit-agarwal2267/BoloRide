@@ -40,6 +40,15 @@ async def test_unknown_phone_requires_onboarding() -> None:
 
 
 @pytest.mark.asyncio
+async def test_identity_discovery_distinguishes_returning_without_verifying_phone_alone() -> None:
+    user = SimpleNamespace(id=uuid4(), normalized_name="amit agarwal")
+    service = UserService(UserRepositoryStub(user))  # type: ignore[arg-type]
+    result = await service.begin_identity("9876543210")
+    assert result.state is CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED
+    assert result.customer_id is None
+
+
+@pytest.mark.asyncio
 async def test_phone_alone_does_not_verify_returning_customer() -> None:
     user = SimpleNamespace(id=uuid4(), normalized_name="amit agarwal")
     service = UserService(UserRepositoryStub(user))  # type: ignore[arg-type]

@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     # TTS
     tts_provider: Literal["edge"] = "edge"
     tts_voice: str = "hi-IN-SwaraNeural"
+    tts_male_voice: str = "hi-IN-MadhurNeural"
+    tts_female_voice: str = "hi-IN-SwaraNeural"
     local_tts_model: str = "hi-IN-SwaraNeural"
     local_tts_device: str = "cpu"
 

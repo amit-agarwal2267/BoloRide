@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -10,6 +11,9 @@ from boloride.agents.lifecycle import voice_session_trace
 from boloride.agents.session import BoloRideLiveKitLLM
 from boloride.agents.voice_agent import BoloRideAgent
 from boloride.config import get_settings
+from boloride.domain.exceptions import DomainValidationError
+from boloride.domain.models.persona import AgentPersona, PersonaGender
+from boloride.domain.policies import CustomerIdentityResult, CustomerIdentityState
 from boloride.db.session import create_database_engine, create_session_factory
 from boloride.integrations.langfuse.client import LangfuseClient
 from boloride.integrations.langfuse.tracing import LangfuseTracer
@@ -34,6 +38,7 @@ from boloride.services.pricing_service import PricingService
 from boloride.services.quote_service import QuoteService
 from boloride.services.ride_service import RideService
 from boloride.services.offer_service import OfferService
+from boloride.services.persona_service import PersonaSelector
 from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.user_service import UserService
 from boloride.services.time_resolution_service import TimeResolutionService
@@ -58,10 +63,6 @@ server = AgentServer(
 
 @server.rtc_session(agent_name=settings.livekit_agent_name)
 async def entrypoint(ctx: JobContext) -> None:
-    if not settings.development_caller_phone:
-        raise RuntimeError(
-            "DEVELOPMENT_CALLER_PHONE is required until participant identity is implemented"
-        )
     session_id = ctx.job.id
     ctx.log_context_fields = {"session_id": session_id}
     engine = create_database_engine(settings)
@@ -72,6 +73,16 @@ async def entrypoint(ctx: JobContext) -> None:
     trace = trace_manager.__enter__()
     llm_router = create_llm_router(settings, tracer)
     maps_router = MapsRouter(settings)
+    persona = PersonaSelector(
+        (
+            AgentPersona("formal-male", PersonaGender.MALE, settings.tts_male_voice),
+            AgentPersona("formal-female", PersonaGender.FEMALE, settings.tts_female_voice),
+        )
+    ).select()
+    logger.info(
+        "persona_selected",
+        extra={"event": "persona_selected", "session_id": session_id, "persona_id": persona.persona_id, "gender": persona.gender.value},
+    )
 
     async def shutdown() -> None:
         quotes.disconnect(ride_context)
@@ -84,16 +95,18 @@ async def entrypoint(ctx: JobContext) -> None:
         langfuse.shutdown()
 
     users = UserRepository(database_session)
-    identity = await UserService(users).resolve_returning_customer(
-        settings.development_caller_phone,
-        provided_name=None,
-    )
-    if not identity.verified or identity.customer_id is None:
-        raise RuntimeError(
-            "LiveKit customer onboarding and phone-plus-name verification must be "
-            "integrated before persisted customer operations are enabled"
-        )
-    user_id = identity.customer_id
+    user_service = UserService(users)
+    detected_phone = _caller_phone(ctx, settings.development_caller_phone)
+    logger.info("customer_identity_started", extra={"event": "customer_identity_started", "session_id": session_id})
+    try:
+        identity = await user_service.begin_identity(detected_phone)
+    except DomainValidationError:
+        identity = CustomerIdentityResult(CustomerIdentityState.PHONE_UNAVAILABLE)
+    except Exception:
+        logger.exception("customer_identity_failed", extra={"event": "customer_identity_failed", "session_id": session_id})
+        identity = CustomerIdentityResult(CustomerIdentityState.IDENTITY_UNAVAILABLE)
+    branch_event = "new_customer_detected" if identity.state is CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED else "returning_customer_detected" if identity.state is CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED else "customer_phone_unavailable" if identity.state is CustomerIdentityState.PHONE_UNAVAILABLE else "customer_identity_failed"
+    logger.info(branch_event, extra={"event": branch_event, "session_id": session_id, "identity_result": identity.state.value})
 
     rides = RideRepository(database_session)
     vehicles = VehicleService(VehicleTypeRepository(database_session))
@@ -125,14 +138,14 @@ async def entrypoint(ctx: JobContext) -> None:
     ).get(PromptKey.VOICE_AGENT)
     ride_context = RideContext(
         session_id=session_id,
-        caller_id=user_id,
+        caller_id=None,
         identity_state=identity.state,
-        verified_customer_id=user_id,
+        verified_customer_id=None,
     )
     agent = BoloRideAgent(
         base_prompt=prompt.content,
         context=ride_context,
-        user_id=user_id,
+        user_id=None,
         database_session=database_session,
         locations=locations,
         saved_places=saved_places,
@@ -157,12 +170,15 @@ async def entrypoint(ctx: JobContext) -> None:
         default_country=settings.default_country,
         timezone=settings.default_timezone,
         time_resolution=TimeResolutionService(lambda: datetime.now(UTC), settings.default_timezone),
+        user_service=user_service,
+        detected_phone=detected_phone,
+        persona=persona,
     )
     ctx.add_shutdown_callback(shutdown)
     session = AgentSession(
         stt=STTRouter(settings).get_provider().get_livekit_stt(),
         llm=BoloRideLiveKitLLM(llm_router, session_id=session_id),
-        tts=TTSRouter(settings).get_provider().get_livekit_tts(),
+        tts=TTSRouter(settings, voice=persona.edge_tts_voice).get_provider().get_livekit_tts(),
         vad=silero.VAD.load(),
     )
     room_options = room_io.RoomOptions(
@@ -172,10 +188,9 @@ async def entrypoint(ctx: JobContext) -> None:
             ),
         )
     )
+    session.input.set_audio_enabled(False)
     await session.start(agent=agent, room=ctx.room, room_options=room_options)
-    session.generate_reply(
-        instructions="Greet the caller briefly and ask where they want to go."
-    )
+    await play_deterministic_welcome(session, persona, session_id)
     logger.info(
         "voice_session_started",
         extra={
@@ -187,6 +202,45 @@ async def entrypoint(ctx: JobContext) -> None:
             "prompt_source": prompt.source,
         },
     )
+
+
+async def play_deterministic_welcome(
+    session: AgentSession, persona: AgentPersona, session_id: str
+) -> bool:
+    """Speak the fixed welcome once, with caller audio disabled and no LLM call."""
+    logger.info("deterministic_welcome_started", extra={"event": "deterministic_welcome_started", "session_id": session_id, "gender": persona.gender.value})
+    try:
+        handle = session.say(persona.welcome, allow_interruptions=False, add_to_chat_ctx=True)
+        await handle.wait_for_playout()
+    except Exception:
+        logger.exception("deterministic_welcome_failed", extra={"event": "deterministic_welcome_failed", "session_id": session_id, "gender": persona.gender.value})
+        return False
+    finally:
+        session.input.set_audio_enabled(True)
+    logger.info("deterministic_welcome_completed", extra={"event": "deterministic_welcome_completed", "session_id": session_id, "gender": persona.gender.value})
+    return True
+
+
+def _caller_phone(ctx: JobContext, development_phone: str | None) -> str | None:
+    """Read adapter-owned phone metadata, falling back only to explicit dev config."""
+    metadata = getattr(ctx.job, "metadata", None)
+    if isinstance(metadata, str) and metadata.strip():
+        try:
+            payload = json.loads(metadata)
+        except ValueError:
+            payload = {}
+        if isinstance(payload, dict):
+            for key in ("phone_number", "caller_phone", "sip_phone_number"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+    for participant in getattr(ctx.room, "remote_participants", {}).values():
+        attributes = getattr(participant, "attributes", {})
+        for key in ("sip.phoneNumber", "sip.trunkPhoneNumber", "phone_number"):
+            value = attributes.get(key) if isinstance(attributes, dict) else None
+            if isinstance(value, str) and value.strip():
+                return value
+    return development_phone
 
 
 if __name__ == "__main__":

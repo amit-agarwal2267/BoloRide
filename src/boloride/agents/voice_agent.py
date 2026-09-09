@@ -13,6 +13,8 @@ from boloride.domain.exceptions import DomainValidationError, LocationProviderEr
 from boloride.domain.models.location import ResolvedLocation
 from boloride.domain.models.location import LocationResolutionStatus
 from boloride.domain.models.scheduling import TimeResolutionStatus
+from boloride.domain.models.persona import AgentPersona
+from boloride.domain.policies import CustomerIdentityState
 from boloride.domain.models.booking import BookingResultStatus
 from boloride.domain.models.cancellation import CancellationResultStatus
 from boloride.domain.models.dispatch import DispatchResultStatus
@@ -27,6 +29,7 @@ from boloride.services.ride_service import RideService
 from boloride.services.dispatch_service import DispatchService
 from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.time_resolution_service import TimeResolutionService
+from boloride.services.user_service import UserService
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +42,7 @@ class BoloRideAgent(Agent):
         *,
         base_prompt: str,
         context: RideContext,
-        user_id: UUID,
+        user_id: UUID | None,
         database_session: AsyncSession,
         locations: LocationService,
         saved_places: SavedPlaceService,
@@ -55,6 +58,9 @@ class BoloRideAgent(Agent):
         default_country: str,
         timezone: str,
         time_resolution: TimeResolutionService | None = None,
+        user_service: UserService | None = None,
+        detected_phone: str | None = None,
+        persona: AgentPersona | None = None,
     ) -> None:
         self.ride_context = context
         self._user_id = user_id
@@ -75,7 +81,98 @@ class BoloRideAgent(Agent):
         self._time_resolution = time_resolution or TimeResolutionService(
             lambda: datetime.now(self._timezone), timezone
         )
-        super().__init__(instructions=build_agent_instructions(base_prompt, context))
+        self._user_service = user_service
+        self._detected_phone = detected_phone
+        self._persona = persona
+        super().__init__(instructions=build_agent_instructions(base_prompt, context, persona))
+
+    def _verified_user(self) -> UUID | None:
+        if not self.ride_context.identity_verified:
+            return None
+        return self.ride_context.verified_customer_id
+
+    @function_tool
+    async def get_identity_requirements(self) -> str:
+        """Describe the backend-selected identity branch without exposing customer data."""
+        state = self.ride_context.identity_state
+        if state is CustomerIdentityState.PHONE_UNAVAILABLE:
+            return "Caller phone metadata is unavailable, so customer identification cannot continue."
+        if state is CustomerIdentityState.IDENTITY_UNAVAILABLE:
+            return "Customer identification is temporarily unavailable. Please try again."
+        if state is CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED:
+            return "Collect the caller's name and age for first-time onboarding."
+        if state in {
+            CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED,
+            CustomerIdentityState.NAME_MISMATCH,
+        }:
+            return "Collect the caller's name for returning-customer verification. Do not ask for age."
+        if self.ride_context.identity_verified:
+            return "Customer identity is ready. Do not request identity details again."
+        return "Customer identification is temporarily unavailable. Please try again."
+
+    @function_tool
+    async def record_identity_details(self, name: str | None = None, age: int | None = None) -> str:
+        """Record or correct pending identity details without creating a customer."""
+        if self.ride_context.identity_verified:
+            return "Customer identity is already established."
+        if self.ride_context.identity_state is CustomerIdentityState.PHONE_UNAVAILABLE:
+            return "Caller identification cannot continue without phone metadata."
+        if self.ride_context.identity_state is CustomerIdentityState.IDENTITY_UNAVAILABLE:
+            return "Customer identification is temporarily unavailable."
+        self.ride_context.update_identity_details(name=name, age=age)
+        return "Pending identity details updated. Submit them for deterministic verification."
+
+    @function_tool
+    async def submit_customer_identity(self) -> str:
+        """Onboard or verify using UserService; the LLM never decides identity matches."""
+        if self.ride_context.identity_verified:
+            return "Customer identity is already established."
+        if self._user_service is None:
+            return "Customer identification is temporarily unavailable."
+        state = self.ride_context.identity_state
+        try:
+            if state is CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED:
+                if not self.ride_context.pending_customer_name or self.ride_context.pending_customer_age is None:
+                    return "Both name and age are required for first-time onboarding."
+                result = await self._user_service.onboard_customer(
+                    self._detected_phone,
+                    self.ride_context.pending_customer_name,
+                    self.ride_context.pending_customer_age,
+                )
+            elif state in {
+                CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED,
+                CustomerIdentityState.NAME_MISMATCH,
+            }:
+                if not self.ride_context.pending_customer_name:
+                    return "Name is required for returning-customer verification."
+                result = await self._user_service.resolve_returning_customer(
+                    self._detected_phone, self.ride_context.pending_customer_name
+                )
+            else:
+                return "Customer identification cannot proceed in the current state."
+        except DomainValidationError as exc:
+            return f"Identity details need correction: {exc}."
+        except Exception:
+            await self._database_session.rollback()
+            logger.exception("customer_identity_failed", extra={"event": "customer_identity_failed", "session_id": self.ride_context.session_id})
+            return "Customer identification is temporarily unavailable. Please try again."
+        self.ride_context.identity_state = result.state
+        if not result.verified or result.customer_id is None:
+            logger.info("customer_verification_failed", extra={"event": "customer_verification_failed", "session_id": self.ride_context.session_id, "identity_result": result.state.value})
+            return "The provided name did not match. Please confirm the name and try again."
+        if result.state is CustomerIdentityState.ONBOARDED_NEW_CUSTOMER:
+            try:
+                await self._database_session.commit()
+            except Exception:
+                await self._database_session.rollback()
+                logger.exception("customer_identity_failed", extra={"event": "customer_identity_failed", "session_id": self.ride_context.session_id})
+                return "Customer identification is temporarily unavailable. Please try again."
+        self.ride_context.establish_identity(result.state, result.customer_id)
+        self._user_id = result.customer_id
+        completed_event = "customer_onboarding_completed" if result.state is CustomerIdentityState.ONBOARDED_NEW_CUSTOMER else "customer_verification_completed"
+        logger.info(completed_event, extra={"event": completed_event, "session_id": self.ride_context.session_id})
+        logger.info("customer_identity_ready", extra={"event": "customer_identity_ready", "session_id": self.ride_context.session_id, "identity_result": result.state.value})
+        return "Customer identity verified. Ride services are now available."
 
     def _trace_metadata(self, tool_name: str) -> dict[str, object]:
         return {"session_id": self.ride_context.session_id, "tool_name": tool_name}
@@ -100,13 +197,16 @@ class BoloRideAgent(Agent):
     @function_tool
     async def get_saved_places(self) -> str:
         """List this caller's saved places before searching labels like home or work."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before using saved places."
         with self._tracer.observe(
             "get_saved_places",
             observation_type="tool",
             correlation_id=self.ride_context.session_id,
             metadata=self._trace_metadata("get_saved_places"),
         ):
-            places = await self._saved_places.list_places(self._user_id)
+            places = await self._saved_places.list_places(user_id)
         if not places:
             return "No saved places found."
         return "\n".join(
@@ -118,7 +218,10 @@ class BoloRideAgent(Agent):
         self, label: str, role: Literal["pickup", "destination"]
     ) -> str:
         """Select a saved place as pickup or destination using its exact label."""
-        place = await self._saved_places.get_place(self._user_id, label)
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before using saved places."
+        place = await self._saved_places.get_place(user_id, label)
         if place is None:
             return f"No saved place has label '{label}'."
         location = ResolvedLocation(
@@ -137,8 +240,11 @@ class BoloRideAgent(Agent):
         self, query: str, role: Literal["pickup", "destination"]
     ) -> str:
         """Search maps and return numbered candidates; never invent a location."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before planning a ride."
         try:
-            saved = await self._saved_places.resolve_label(self._user_id, query)
+            saved = await self._saved_places.resolve_label(user_id, query)
         except ValueError:
             return "More than one saved place matches that label. Ask which one they mean."
         if saved is not None:
@@ -185,6 +291,8 @@ class BoloRideAgent(Agent):
         self, candidate_number: int, role: Literal["pickup", "destination"]
     ) -> str:
         """Select one numbered candidate returned by the most recent location search."""
+        if self._verified_user() is None:
+            return "Customer identification is required before planning a ride."
         candidates = self.ride_context.location_candidates
         if self.ride_context.location_candidate_role not in (None, role):
             return "That candidate list belongs to a different location. Search again."
@@ -200,6 +308,8 @@ class BoloRideAgent(Agent):
     @function_tool
     async def set_ride_time(self, time_phrase: str, correction: bool = False) -> str:
         """Resolve a bounded caller time phrase; never trust an LLM-generated datetime."""
+        if self._verified_user() is None:
+            return "Customer identification is required before planning a ride."
         result = self._time_resolution.resolve(
             time_phrase, previous=self.ride_context.ride_time, correction=correction
         )
@@ -219,8 +329,11 @@ class BoloRideAgent(Agent):
     @function_tool
     async def get_previous_rides(self, limit: int = 3) -> str:
         """List a small number of this caller's latest rides."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before accessing rides."
         rides = await self._rides.list_for_customer(
-            self._user_id, limit=max(1, min(limit, 5))
+            user_id, limit=max(1, min(limit, 5))
         )
         if not rides:
             return "No previous rides found."
@@ -235,6 +348,9 @@ class BoloRideAgent(Agent):
     @function_tool
     async def get_ride_status(self, ride_id: str) -> str:
         """Return the current persisted status of one customer-owned ride."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before accessing rides."
         try:
             parsed_id = UUID(ride_id)
         except ValueError:
@@ -246,7 +362,7 @@ class BoloRideAgent(Agent):
             metadata=self._trace_metadata("get_ride_status"),
         ):
             details = await self._ride_service.get_customer_ride_status(
-                self._user_id, parsed_id, self.ride_context
+                user_id, parsed_id, self.ride_context
             )
         if details is None:
             return "No matching ride was found for this customer."
@@ -270,6 +386,9 @@ class BoloRideAgent(Agent):
     @function_tool
     async def dispatch_booked_ride(self, ride_id: str) -> str:
         """Deterministically assign the nearest eligible demo driver."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before dispatch."
         try:
             parsed_id = UUID(ride_id)
         except ValueError:
@@ -280,7 +399,7 @@ class BoloRideAgent(Agent):
             correlation_id=self.ride_context.session_id,
             metadata=self._trace_metadata("dispatch_booked_ride"),
         ) as observation:
-            result = await self._dispatch.dispatch(self._user_id, parsed_id)
+            result = await self._dispatch.dispatch(user_id, parsed_id)
             observation.update(metadata={"dispatch_result": result.status.value})
         if result.status is DispatchResultStatus.ASSIGNED:
             return "A driver has been assigned to this ride."
@@ -293,12 +412,15 @@ class BoloRideAgent(Agent):
     @function_tool
     async def select_ride_for_cancellation(self, ride_id: str) -> str:
         """Select one exact customer-owned ride and request cancellation confirmation."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before cancellation."
         try:
             parsed_id = UUID(ride_id)
         except ValueError:
             return "That ride ID is invalid."
         details = await self._ride_service.get_customer_ride_status(
-            self._user_id, parsed_id, self.ride_context
+            user_id, parsed_id, self.ride_context
         )
         if details is None:
             self.ride_context.clear_cancellation()
@@ -318,6 +440,8 @@ class BoloRideAgent(Agent):
         self, ride_id: str, explicitly_confirmed: bool
     ) -> str:
         """Record a yes/no cancellation response for the exact selected ride."""
+        if self._verified_user() is None:
+            return "Customer identification is required before cancellation."
         try:
             parsed_id = UUID(ride_id)
             self.ride_context.record_cancellation_confirmation(
@@ -340,6 +464,9 @@ class BoloRideAgent(Agent):
     @function_tool
     async def cancel_selected_ride(self, ride_id: str) -> str:
         """Cancel the exact selected ride after explicit cancellation confirmation."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before cancellation."
         try:
             parsed_id = UUID(ride_id)
         except ValueError:
@@ -351,7 +478,7 @@ class BoloRideAgent(Agent):
             metadata=self._trace_metadata("cancel_selected_ride"),
         ) as observation:
             result = await self._ride_service.cancel_customer_ride(
-                self._user_id, parsed_id, self.ride_context
+                user_id, parsed_id, self.ride_context
             )
             observation.update(metadata={"cancellation_result": result.status.value})
         if result.status is CancellationResultStatus.CONFIRMATION_REQUIRED:
@@ -371,6 +498,8 @@ class BoloRideAgent(Agent):
     @function_tool
     async def record_booking_confirmation(self, explicitly_confirmed: bool) -> str:
         """Record the caller's explicit yes/no response to the final ride summary."""
+        if self._verified_user() is None:
+            return "Customer identification is required before booking."
         if explicitly_confirmed:
             if self.ride_context.current_quote is None:
                 return "No current fare quote is available to confirm."
@@ -385,9 +514,12 @@ class BoloRideAgent(Agent):
     @function_tool
     async def get_available_offers(self) -> str:
         """Return offers the backend currently considers eligible."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before viewing offers."
         currency = self.ride_context.current_quote.pricing.currency if self.ride_context.current_quote else "INR"
         with self._tracer.observe("offer_eligibility", observation_type="tool", correlation_id=self.ride_context.session_id, metadata=self._trace_metadata("get_available_offers")) as observation:
-            offers = await self._offers.get_eligible_offers(self._user_id, currency)
+            offers = await self._offers.get_eligible_offers(user_id, currency)
             observation.update(metadata={"eligible_offer_count": len(offers), "offer_codes": [offer.code for offer in offers]})
         if not offers:
             return "No eligible offers are currently available."
@@ -396,9 +528,12 @@ class BoloRideAgent(Agent):
     @function_tool
     async def apply_offer(self, offer_code: str) -> str:
         """Apply one backend-validated offer to create a fresh estimate."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Customer identification is required before applying offers."
         try:
             with self._tracer.observe("offer_application", observation_type="tool", correlation_id=self.ride_context.session_id, metadata={**self._trace_metadata("apply_offer"), "offer_code": offer_code.strip().upper()}):
-                quote = await self._offers.apply_offer(self._user_id, self.ride_context, offer_code)
+                quote = await self._offers.apply_offer(user_id, self.ride_context, offer_code)
         except DomainValidationError as exc:
             return f"Offer could not be applied: {exc}."
         return f"Offer applied. New estimated fare: {quote.pricing.currency} {quote.pricing.estimated_total:.0f}. Fresh confirmation is required."
@@ -406,6 +541,8 @@ class BoloRideAgent(Agent):
     @function_tool
     async def remove_applied_offer(self) -> str:
         """Remove the current offer by producing a fresh non-discounted estimate."""
+        if self._verified_user() is None:
+            return "Customer identification is required before applying offers."
         try:
             quote = await self._offers.remove_offer(self.ride_context)
         except DomainValidationError as exc:
@@ -415,6 +552,8 @@ class BoloRideAgent(Agent):
     @function_tool
     async def create_fare_quote(self) -> str:
         """Create a backend-computed estimated fare for the current ride request."""
+        if self._verified_user() is None:
+            return "Customer identification is required before creating a fare quote."
         try:
             quote = await self._quotes.create_quote(self.ride_context)
         except DomainValidationError as exc:
@@ -434,6 +573,9 @@ class BoloRideAgent(Agent):
     @function_tool
     async def create_booking(self) -> str:
         """Create the mock booking; BookingService independently requires prior confirmation."""
+        user_id = self._verified_user()
+        if user_id is None:
+            return "Booking rejected: customer identification is required."
         try:
             with self._tracer.observe(
                 "create_booking",
@@ -442,7 +584,7 @@ class BoloRideAgent(Agent):
                 metadata=self._trace_metadata("create_booking"),
             ) as observation:
                 outcome = await self._booking.book_ride(
-                    self._user_id, self.ride_context
+                    user_id, self.ride_context
                 )
                 observation.update(
                     metadata={

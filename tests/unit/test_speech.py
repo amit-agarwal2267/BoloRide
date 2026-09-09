@@ -57,3 +57,8 @@ def test_tts_router_exposes_livekit_compatible_edge_adapter() -> None:
     assert isinstance(adapter, EdgeTTS)
     assert adapter.provider == "edge"
     assert adapter.sample_rate == 24000
+
+
+def test_tts_router_uses_session_persona_voice_override() -> None:
+    adapter = TTSRouter(settings(), voice="hi-IN-MadhurNeural").get_provider().get_livekit_tts()
+    assert adapter.model == "hi-IN-MadhurNeural"
