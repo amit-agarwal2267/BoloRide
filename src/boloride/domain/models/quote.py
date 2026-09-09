@@ -8,6 +8,7 @@ from uuid import UUID
 
 from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.location import ResolvedLocation, TollStatus
+from boloride.domain.models.offer import AppliedOfferSnapshot
 
 
 class FareComponentType(StrEnum):
@@ -47,6 +48,8 @@ class PricingResult:
     toll_status: TollStatus
     estimated_total: Decimal
     currency: str
+    pre_discount_estimated_total: Decimal | None = None
+    applied_offer: AppliedOfferSnapshot | None = None
 
     def component(self, component_type: FareComponentType) -> Decimal:
         return next(

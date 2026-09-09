@@ -11,6 +11,7 @@ from boloride.integrations.rideprovider.base import (
 from boloride.repositories.ride_repository import RideRepository
 from boloride.services.vehicle_service import VehicleService
 from boloride.services.quote_service import QuoteService
+from boloride.services.offer_service import OfferService
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,11 +28,13 @@ class BookingService:
 		provider: RideProvider,
 		vehicles: VehicleService,
 		quotes: QuoteService,
+		offers: OfferService | None = None,
 	) -> None:
 		self._rides = rides
 		self._provider = provider
 		self._vehicles = vehicles
 		self._quotes = quotes
+		self._offers = offers
 
 	async def book_ride(self, user_id: UUID, context: RideContext) -> BookingOutcome:
 		if not context.identity_verified or context.verified_customer_id != user_id:
@@ -55,6 +58,9 @@ class BookingService:
 			context.passenger_count,
 		)
 		accepted_quote = await self._quotes.require_bookable_quote(context)
+		if accepted_quote.pricing.applied_offer is not None and self._offers is None:
+			raise DomainValidationError("offer service is required for discounted booking")
+		offer = await self._offers.revalidate_quote(user_id, accepted_quote) if self._offers else None
 
 		request_id = uuid4()
 		provider_result = await self._provider.create_booking(
@@ -77,6 +83,8 @@ class BookingService:
 			provider_booking_id=provider_result.provider_booking_id,
 			accepted_quote=accepted_quote,
 		)
+		if offer is not None and self._offers is not None:
+			await self._offers.create_pending_redemption(user_id, offer, booked_ride.id)
 		context.booking_id = booked_ride.id
 		context.booking_confirmed = True
 		return BookingOutcome(booked_ride, provider_result, accepted_quote)

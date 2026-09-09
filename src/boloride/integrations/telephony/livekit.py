@@ -19,6 +19,7 @@ from boloride.observability.logger import configure_logging
 from boloride.prompts.registry import PromptKey, PromptRegistry
 from boloride.repositories.ride_repository import RideRepository
 from boloride.repositories.pricing_rule_repository import PricingRuleRepository
+from boloride.repositories.offer_repository import OfferRepository
 from boloride.repositories.saved_place_repository import SavedPlaceRepository
 from boloride.repositories.user_repository import UserRepository
 from boloride.repositories.vehicle_type_repository import VehicleTypeRepository
@@ -26,6 +27,7 @@ from boloride.services.booking_service import BookingService
 from boloride.services.location_service import LocationService
 from boloride.services.pricing_service import PricingService
 from boloride.services.quote_service import QuoteService
+from boloride.services.offer_service import OfferService
 from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.user_service import UserService
 from boloride.services.vehicle_service import VehicleService
@@ -98,6 +100,7 @@ async def entrypoint(ctx: JobContext) -> None:
     quotes = QuoteService(
         PricingService(PricingRuleRepository(database_session)), locations
     )
+    offers = OfferService(OfferRepository(database_session), quotes)
     prompt = PromptRegistry(
         langfuse,
         label=settings.langfuse_prompt_label,
@@ -117,8 +120,9 @@ async def entrypoint(ctx: JobContext) -> None:
         locations=locations,
         saved_places=saved_places,
         rides=rides,
-        booking=BookingService(rides, MockRideProvider(), vehicles, quotes),
+        booking=BookingService(rides, MockRideProvider(), vehicles, quotes, offers),
         quotes=quotes,
+        offers=offers,
         tracer=tracer,
         default_city=settings.default_city,
         default_state=settings.default_state,
