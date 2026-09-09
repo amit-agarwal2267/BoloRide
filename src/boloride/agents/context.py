@@ -28,6 +28,8 @@ class RideContext:
 	booking_confirmed: bool = False
 	current_quote: Quote | None = None
 	confirmed_quote_id: UUID | None = None
+	cancellation_target_ride_id: UUID | None = None
+	cancellation_confirmed_ride_id: UUID | None = None
 	session_active: bool = True
 	clarification_required: bool = False
 	location_candidates: tuple[LocationCandidate, ...] = ()
@@ -73,6 +75,33 @@ class RideContext:
 	def disconnect(self) -> None:
 		self.session_active = False
 		self._invalidate_quote()
+		self.clear_cancellation()
+
+	def select_cancellation_target(self, ride_id: UUID) -> None:
+		if self.cancellation_target_ride_id != ride_id:
+			self.cancellation_confirmed_ride_id = None
+		self.cancellation_target_ride_id = ride_id
+
+	def record_cancellation_confirmation(
+		self, ride_id: UUID, explicitly_confirmed: bool
+	) -> None:
+		if self.cancellation_target_ride_id != ride_id:
+			raise DomainValidationError("cancellation confirmation must match the selected ride")
+		if explicitly_confirmed:
+			self.cancellation_confirmed_ride_id = ride_id
+		else:
+			self.clear_cancellation()
+
+	def clear_cancellation(self) -> None:
+		self.cancellation_target_ride_id = None
+		self.cancellation_confirmed_ride_id = None
+
+	def cancellation_is_confirmed_for(self, ride_id: UUID) -> bool:
+		return (
+			self.session_active
+			and self.cancellation_target_ride_id == ride_id
+			and self.cancellation_confirmed_ride_id == ride_id
+		)
 
 	def update_pickup(self, pickup: ResolvedLocation | None) -> None:
 		if self.pickup != pickup:

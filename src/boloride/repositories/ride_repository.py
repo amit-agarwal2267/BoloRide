@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
+from decimal import Decimal
+
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +11,8 @@ from boloride.db.models.accepted_quote import AcceptedQuote
 from boloride.domain.enums import RideStatus
 from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.location import ResolvedLocation
+from boloride.domain.models.cancellation import RideStatusDetails
+from boloride.domain.models.ride import CANCELLABLE_RIDE_STATUSES
 from boloride.domain.models.ride import validate_ride_transition
 from boloride.domain.models.quote import FareComponentType, Quote
 
@@ -118,10 +122,56 @@ class RideRepository:
             statement = statement.with_for_update()
         return await self._session.scalar(statement)
 
-    async def get_for_customer(self, customer_id: UUID, ride_id: UUID) -> Ride | None:
-        return await self._session.scalar(
-            select(Ride).where(Ride.id == ride_id, Ride.user_id == customer_id)
+    async def get_for_customer(
+        self, customer_id: UUID, ride_id: UUID, *, for_update: bool = False
+    ) -> Ride | None:
+        statement = select(Ride).where(
+            Ride.id == ride_id, Ride.user_id == customer_id
         )
+        if for_update:
+            statement = statement.with_for_update()
+        return await self._session.scalar(statement)
+
+    async def get_status_for_customer(
+        self, customer_id: UUID, ride_id: UUID
+    ) -> RideStatusDetails | None:
+        row = (
+            await self._session.execute(
+                select(Ride, AcceptedQuote)
+                .outerjoin(AcceptedQuote, AcceptedQuote.ride_id == Ride.id)
+                .where(Ride.id == ride_id, Ride.user_id == customer_id)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        ride, quote = row
+        return RideStatusDetails(
+            ride_id=ride.id,
+            status=ride.status,
+            destination=ride.destination_display_name or ride.destination_address,
+            requested_ride_at=ride.requested_ride_at,
+            vehicle_type_code=quote.vehicle_type_code if quote else None,
+            estimated_fare=quote.estimated_total if quote else ride.fare_amount,
+            currency=quote.currency if quote else ride.fare_currency,
+            final_customer_cost=ride.final_customer_cost,
+        )
+
+    async def cancel_for_customer(
+        self, customer_id: UUID, ride_id: UUID, *, expected_status: RideStatus
+    ) -> Ride | None:
+        if expected_status not in CANCELLABLE_RIDE_STATUSES:
+            raise DomainValidationError("only a pre-trip ride can be cancelled")
+        result = await self._session.execute(
+            update(Ride)
+            .where(
+                Ride.id == ride_id,
+                Ride.user_id == customer_id,
+                Ride.status == expected_status,
+            )
+            .values(status=RideStatus.CANCELLED, final_customer_cost=Decimal("0.00"))
+            .returning(Ride)
+        )
+        return result.scalar_one_or_none()
 
     async def list_for_customer(
         self, customer_id: UUID, *, limit: int = 5

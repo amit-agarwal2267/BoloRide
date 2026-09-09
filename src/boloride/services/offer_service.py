@@ -133,6 +133,19 @@ class OfferService:
             if changed:
                 logger.info("offer_redemption_cancelled", extra={"event": "offer_redemption_cancelled", "ride_id": str(ride_id)})
 
+    async def cancel_pending_redemption(
+        self, customer_id: UUID, ride_id: UUID
+    ) -> bool:
+        _, changed = await self._offers.finalize_for_ride(
+            customer_id, ride_id, RedemptionStatus.CANCELLED
+        )
+        if changed:
+            logger.info(
+                "offer_redemption_released",
+                extra={"event": "offer_redemption_released"},
+            )
+        return changed
+
     async def _require_eligible(self, customer_id: UUID, code: str, currency: str, *, now: datetime | None = None) -> OfferDetails:
         row = await self._offers.get_by_code(code)
         if row is None:

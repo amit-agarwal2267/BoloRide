@@ -2,7 +2,7 @@ import pytest
 
 from boloride.domain.enums import RideStatus
 from boloride.domain.exceptions import InvalidRideTransitionError
-from boloride.domain.models.ride import validate_ride_transition
+from boloride.domain.models.ride import CANCELLABLE_RIDE_STATUSES, validate_ride_transition
 
 
 @pytest.mark.parametrize(
@@ -42,3 +42,10 @@ def test_ride_lifecycle_rejects_every_other_transition(
 ) -> None:
     with pytest.raises(InvalidRideTransitionError):
         validate_ride_transition(current, requested)
+
+
+def test_only_booked_and_assigned_are_cancellable() -> None:
+    assert CANCELLABLE_RIDE_STATUSES == {
+        RideStatus.BOOKED,
+        RideStatus.ASSIGNED,
+    }
