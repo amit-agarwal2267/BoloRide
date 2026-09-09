@@ -55,8 +55,8 @@ class EdgeChunkedStream(tts.ChunkedStream):
 class EdgeTTSProvider:
     provider_name = "edge"
 
-    def __init__(self, settings: Settings) -> None:
-        self._voice = settings.tts_voice
+    def __init__(self, settings: Settings, *, voice: str | None = None) -> None:
+        self._voice = voice or settings.tts_voice
 
     def get_livekit_tts(self) -> tts.TTS:
         return EdgeTTS(self._voice)

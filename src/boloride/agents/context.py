@@ -15,6 +15,8 @@ class RideContext:
 	caller_id: UUID | None
 	identity_state: CustomerIdentityState | None = None
 	verified_customer_id: UUID | None = None
+	pending_customer_name: str | None = None
+	pending_customer_age: int | None = None
 	intent: str | None = None
 	pickup: ResolvedLocation | None = None
 	destination: ResolvedLocation | None = None
@@ -45,6 +47,24 @@ class RideContext:
 			}
 			and self.verified_customer_id is not None
 		)
+
+	def update_identity_details(self, *, name: str | None = None, age: int | None = None) -> None:
+		if name is not None:
+			self.pending_customer_name = " ".join(name.split())
+		if age is not None:
+			self.pending_customer_age = age
+
+	def establish_identity(self, state: CustomerIdentityState, customer_id: UUID) -> None:
+		if state not in {
+			CustomerIdentityState.ONBOARDED_NEW_CUSTOMER,
+			CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,
+		}:
+			raise DomainValidationError("only a verified identity can establish a customer")
+		self.identity_state = state
+		self.verified_customer_id = customer_id
+		self.caller_id = customer_id
+		self.pending_customer_name = None
+		self.pending_customer_age = None
 
 	@property
 	def confirmation_received(self) -> bool:

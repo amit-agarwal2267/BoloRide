@@ -5,10 +5,12 @@ from uuid import UUID
 
 class CustomerIdentityState(StrEnum):
     NEW_CUSTOMER_ONBOARDING_REQUIRED = "new_customer_onboarding_required"
+    RETURNING_CUSTOMER_VERIFICATION_REQUIRED = "returning_customer_verification_required"
     ONBOARDED_NEW_CUSTOMER = "onboarded_new_customer"
     VERIFIED_RETURNING_CUSTOMER = "verified_returning_customer"
     NAME_MISMATCH = "name_mismatch"
     PHONE_UNAVAILABLE = "phone_unavailable"
+    IDENTITY_UNAVAILABLE = "identity_unavailable"
 
 
 @dataclass(frozen=True, slots=True)

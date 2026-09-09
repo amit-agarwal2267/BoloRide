@@ -1,7 +1,8 @@
 from boloride.agents.context import RideContext
+from boloride.domain.models.persona import AgentPersona
 
 
-def build_agent_instructions(base_prompt: str, context: RideContext) -> str:
+def build_agent_instructions(base_prompt: str, context: RideContext, persona: AgentPersona | None = None) -> str:
     """Add terse, deterministic safety rules to the managed conversational prompt."""
     return f"""{base_prompt}
 
@@ -15,6 +16,9 @@ Runtime rules:
 - Never record confirmation merely because details are complete or the caller requested a ride earlier.
 - Keep replies concise and natural in the caller's language.
 - Interpret relative times in timezone Asia/Kolkata unless the caller says otherwise.
+- Customer identity is established only by identity tools. Never invent or infer a customer ID.
+
+{persona.grammatical_instruction if persona else ''}
 
 Session correlation ID: {context.session_id}
 """
