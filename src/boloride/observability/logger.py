@@ -34,6 +34,11 @@ class JsonFormatter(logging.Formatter):
             "prompt_source",
             "provider",
             "model",
+            "seed_version",
+            "driver_count",
+            "vehicle_count",
+            "category_counts",
+            "state_counts",
         ):
             value = getattr(record, field, None)
             if value is not None:
