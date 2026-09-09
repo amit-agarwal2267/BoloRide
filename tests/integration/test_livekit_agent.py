@@ -13,6 +13,8 @@ from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.location import LocationCandidate
 from boloride.domain.policies import CustomerIdentityState
 from boloride.services.time_resolution_service import TimeResolutionService
+from boloride.prompts.client import PromptFetchResult, PromptFetchStatus
+from boloride.prompts.registry import PromptKey, PromptRegistry
 
 
 class NullTracer:
@@ -27,7 +29,7 @@ class ConfirmationGuard:
             raise DomainValidationError("explicit booking confirmation is required")
 
 
-def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
+def make_agent(base_prompt: str = "You are BoloRide.") -> tuple[BoloRideAgent, RideContext, AsyncMock]:
     user_id = uuid4()
     context = RideContext(
         session_id="voice-test",
@@ -62,7 +64,7 @@ def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
         ),
     )
     agent = BoloRideAgent(
-        base_prompt="You are BoloRide.",
+        base_prompt=base_prompt,
         context=context,
         user_id=user_id,
         database_session=database_session,
@@ -88,6 +90,14 @@ def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
         time_resolution=TimeResolutionService(lambda: datetime(2026, 9, 6, 12, tzinfo=UTC)),
     )
     return agent, context, database_session
+
+
+def test_agent_construction_uses_fallback_when_langfuse_is_unavailable() -> None:
+    client = SimpleNamespace(fetch_text_prompt=lambda name, label: PromptFetchResult(PromptFetchStatus.NOT_CONFIGURED))
+    prompt = PromptRegistry(client, label="development").get(PromptKey.VOICE_AGENT)
+    agent, _, _ = make_agent(prompt.content)
+    assert prompt.source == "fallback"
+    assert "BoloRide" in agent.instructions
 
 
 @pytest.mark.asyncio

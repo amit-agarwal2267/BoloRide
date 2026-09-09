@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 from boloride.config import Settings
 from boloride.integrations.langfuse.client import LangfuseClient
+from boloride.prompts.client import PromptFetchStatus
 
 
 def enabled_settings() -> Settings:
@@ -24,8 +25,10 @@ def test_fetch_text_prompt_respects_label_and_sdk_cache() -> None:
 
     prompt = client.fetch_text_prompt("boloride-voice-agent", "development")
 
-    assert prompt.content == "managed prompt"
-    assert prompt.version == 7
+    assert prompt.status is PromptFetchStatus.AVAILABLE
+    assert prompt.prompt is not None
+    assert prompt.prompt.content == "managed prompt"
+    assert prompt.prompt.version == 7
     sdk.get_prompt.assert_called_once_with(
         "boloride-voice-agent",
         label="development",
@@ -39,13 +42,20 @@ def test_fetch_failure_is_translated_to_unavailable() -> None:
     sdk = Mock()
     sdk.get_prompt.side_effect = ConnectionError("unavailable")
     client = LangfuseClient(enabled_settings(), sdk_client=sdk)
-    assert client.fetch_text_prompt("prompt", "development") is None
+    assert client.fetch_text_prompt("prompt", "development").status is PromptFetchStatus.UNAVAILABLE
 
 
 def test_disabled_client_never_calls_sdk() -> None:
     settings = enabled_settings().model_copy(update={"langfuse_enabled": False})
     sdk = Mock()
     client = LangfuseClient(settings, sdk_client=sdk)
-    assert client.fetch_text_prompt("prompt", "development") is None
+    assert client.fetch_text_prompt("prompt", "development").status is PromptFetchStatus.NOT_CONFIGURED
     assert client.is_available() is False
     sdk.assert_not_called()
+
+
+def test_unexpected_remote_prompt_representation_is_invalid() -> None:
+    sdk = Mock()
+    sdk.get_prompt.return_value = SimpleNamespace(prompt=["unexpected"], version=1)
+    client = LangfuseClient(enabled_settings(), sdk_client=sdk)
+    assert client.fetch_text_prompt("prompt", "development").status is PromptFetchStatus.INVALID
