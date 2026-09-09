@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create CI environment
+        shell: bash
+        run: |
+          cat > .env <<'EOF'
+          APP_ENV=test
+          APP_PORT=8000
+          POSTGRES_DB=boloride
+          POSTGRES_USER=boloride
+          POSTGRES_PASSWORD=ci-only-postgres-password
+          DATABASE_URL=postgresql+asyncpg://boloride:ci-only-postgres-password@postgres:5432/boloride
+          LANGFUSE_ENABLED=false
+          LIVEKIT_URL=ws://livekit-server:7880
+          LIVEKIT_API_KEY=ci-only-livekit-key
+          LIVEKIT_API_SECRET=ci-only-livekit-secret-not-a-real-credential
+          LLM_PRIMARY_PROVIDER=google
+          LLM_PRIMARY_MODEL=ci-only-google-primary-model
+          LLM_FALLBACK_1_PROVIDER=google
+          LLM_FALLBACK_1_MODEL=ci-only-google-fallback-model
+          LLM_FALLBACK_2_PROVIDER=groq
+          LLM_FALLBACK_2_MODEL=ci-only-groq-fallback-model
+          GOOGLE_API_KEY=ci-only-google-api-key-not-a-secret
+          GROQ_API_KEY=ci-only-groq-api-key-not-a-secret
+          EOF
+
+      - name: Build and start Docker Compose services
+        run: docker compose up -d --build
+
+      - name: Wait for application readiness
+        shell: bash
+        run: |
+          ready=false
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error http://localhost:8000/health/ready; then
+              ready=true
+              break
+            fi
+            echo "Waiting for BoloRide readiness (${attempt}/60)..."
+            sleep 2
+          done
+          if [[ "$ready" != "true" ]]; then
+            echo "BoloRide did not become ready within 120 seconds."
+            exit 1
+          fi
+
+      - name: Run database migrations
+        run: docker compose exec -T boloride uv run alembic upgrade head
+
+      - name: Run full test suite
+        run: docker compose exec -T boloride uv run pytest
+
+      - name: Print Docker diagnostics
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --no-color
+
+      - name: Clean up Docker Compose resources
+        if: always()
+        run: docker compose down --volumes --remove-orphans
