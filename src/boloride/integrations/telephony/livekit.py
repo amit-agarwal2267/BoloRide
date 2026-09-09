@@ -29,6 +29,7 @@ from boloride.services.booking_service import BookingService
 from boloride.services.location_service import LocationService
 from boloride.services.pricing_service import PricingService
 from boloride.services.quote_service import QuoteService
+from boloride.services.ride_service import RideService
 from boloride.services.offer_service import OfferService
 from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.user_service import UserService
@@ -103,6 +104,7 @@ async def entrypoint(ctx: JobContext) -> None:
         PricingService(PricingRuleRepository(database_session)), locations
     )
     offers = OfferService(OfferRepository(database_session), quotes)
+    ride_service = RideService(database_session, rides, offers)
     prompt = PromptRegistry(
         langfuse,
         label=settings.langfuse_prompt_label,
@@ -122,6 +124,7 @@ async def entrypoint(ctx: JobContext) -> None:
         locations=locations,
         saved_places=saved_places,
         rides=rides,
+        ride_service=ride_service,
         booking=BookingService(
             database_session,
             rides,

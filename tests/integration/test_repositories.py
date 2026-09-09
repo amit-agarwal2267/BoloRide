@@ -101,7 +101,7 @@ async def test_customer_scoped_ride_access_and_transition(
     owner = await users.create("9876543215", "Owner", 30)
     other = await users.create("9876543216", "Other", 31)
     rides = RideRepository(db_session)
-    service = RideService(rides)
+    service = RideService(db_session, rides)
     ride = await rides.create_booked(
         uuid4(),
         owner.id,

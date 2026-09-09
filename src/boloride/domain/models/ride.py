@@ -9,6 +9,8 @@ _ALLOWED_TRANSITIONS = {
     RideStatus.CANCELLED: frozenset(),
 }
 
+CANCELLABLE_RIDE_STATUSES = frozenset({RideStatus.BOOKED, RideStatus.ASSIGNED})
+
 
 def validate_ride_transition(
     current: RideStatus, requested: RideStatus

@@ -76,7 +76,7 @@ async def test_pending_reserves_capacity_cancel_releases_and_completion_consumes
 
     await service.finalize_redemption(user.id, rides[0].id, RideStatus.CANCELLED)
     await service.create_pending_redemption(user.id, offer, rides[3].id)
-    lifecycle = RideService(RideRepository(db_session), service)
+    lifecycle = RideService(db_session, RideRepository(db_session), service)
     await lifecycle.transition_customer_ride(user.id, rides[1].id, expected_status=RideStatus.BOOKED, requested_status=RideStatus.ASSIGNED)
     await lifecycle.transition_customer_ride(user.id, rides[1].id, expected_status=RideStatus.ASSIGNED, requested_status=RideStatus.ON_TRIP)
     await lifecycle.transition_customer_ride(user.id, rides[1].id, expected_status=RideStatus.ON_TRIP, requested_status=RideStatus.COMPLETED)

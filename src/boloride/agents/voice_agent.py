@@ -12,12 +12,15 @@ from boloride.agents.instructions import build_agent_instructions
 from boloride.domain.exceptions import DomainValidationError, LocationProviderError
 from boloride.domain.models.location import ResolvedLocation
 from boloride.domain.models.booking import BookingResultStatus
+from boloride.domain.models.cancellation import CancellationResultStatus
+from boloride.domain.enums import RideStatus
 from boloride.integrations.langfuse.tracing import LangfuseTracer
 from boloride.repositories.ride_repository import RideRepository
 from boloride.services.booking_service import BookingService
 from boloride.services.location_service import LocationService
 from boloride.services.quote_service import QuoteService
 from boloride.services.offer_service import OfferService
+from boloride.services.ride_service import RideService
 from boloride.services.saved_place_service import SavedPlaceService
 
 logger = logging.getLogger(__name__)
@@ -36,6 +39,7 @@ class BoloRideAgent(Agent):
         locations: LocationService,
         saved_places: SavedPlaceService,
         rides: RideRepository,
+        ride_service: RideService,
         booking: BookingService,
         quotes: QuoteService,
         offers: OfferService,
@@ -51,6 +55,7 @@ class BoloRideAgent(Agent):
         self._locations = locations
         self._saved_places = saved_places
         self._rides = rides
+        self._ride_service = ride_service
         self._booking = booking
         self._quotes = quotes
         self._offers = offers
@@ -183,6 +188,114 @@ class BoloRideAgent(Agent):
             f"({ride.status.value})"
             for ride in rides
         )
+
+    @function_tool
+    async def get_ride_status(self, ride_id: str) -> str:
+        """Return the current persisted status of one customer-owned ride."""
+        try:
+            parsed_id = UUID(ride_id)
+        except ValueError:
+            return "That ride ID is invalid."
+        with self._tracer.observe(
+            "ride_status_lookup",
+            observation_type="tool",
+            correlation_id=self.ride_context.session_id,
+            metadata=self._trace_metadata("get_ride_status"),
+        ):
+            details = await self._ride_service.get_customer_ride_status(
+                self._user_id, parsed_id, self.ride_context
+            )
+        if details is None:
+            return "No matching ride was found for this customer."
+        final_cost = (
+            f" Final customer cost: {details.currency} {details.final_customer_cost:.0f}."
+            if details.final_customer_cost is not None
+            else ""
+        )
+        return (
+            f"Ride to {details.destination} at {details.requested_ride_at.isoformat()} "
+            f"is {details.status.value}. Vehicle type: {details.vehicle_type_code}. "
+            f"Booked estimate: {details.currency} {details.estimated_fare:.0f}."
+            f"{final_cost}"
+        )
+
+    @function_tool
+    async def select_ride_for_cancellation(self, ride_id: str) -> str:
+        """Select one exact customer-owned ride and request cancellation confirmation."""
+        try:
+            parsed_id = UUID(ride_id)
+        except ValueError:
+            return "That ride ID is invalid."
+        details = await self._ride_service.get_customer_ride_status(
+            self._user_id, parsed_id, self.ride_context
+        )
+        if details is None:
+            self.ride_context.clear_cancellation()
+            return "No matching ride was found for this customer."
+        if details.status not in {RideStatus.BOOKED, RideStatus.ASSIGNED}:
+            self.ride_context.clear_cancellation()
+            return f"That ride is {details.status.value} and cannot be cancelled."
+        self.ride_context.select_cancellation_target(parsed_id)
+        return (
+            f"Selected ride to {details.destination} at "
+            f"{details.requested_ride_at.isoformat()} for cancellation. "
+            "Ask the customer to explicitly confirm cancellation."
+        )
+
+    @function_tool
+    async def record_cancellation_confirmation(
+        self, ride_id: str, explicitly_confirmed: bool
+    ) -> str:
+        """Record a yes/no cancellation response for the exact selected ride."""
+        try:
+            parsed_id = UUID(ride_id)
+            self.ride_context.record_cancellation_confirmation(
+                parsed_id, explicitly_confirmed
+            )
+        except (ValueError, DomainValidationError):
+            return "Cancellation confirmation did not match the selected ride."
+        logger.info(
+            "ride_cancellation_confirmation_recorded",
+            extra={
+                "event": "ride_cancellation_confirmation_recorded",
+                "session_id": self.ride_context.session_id,
+                "confirmed": explicitly_confirmed,
+            },
+        )
+        if explicitly_confirmed:
+            return "Cancellation confirmed for the selected ride."
+        return "Cancellation declined. The ride was not changed."
+
+    @function_tool
+    async def cancel_selected_ride(self, ride_id: str) -> str:
+        """Cancel the exact selected ride after explicit cancellation confirmation."""
+        try:
+            parsed_id = UUID(ride_id)
+        except ValueError:
+            return "That ride ID is invalid."
+        with self._tracer.observe(
+            "cancel_ride",
+            observation_type="tool",
+            correlation_id=self.ride_context.session_id,
+            metadata=self._trace_metadata("cancel_selected_ride"),
+        ) as observation:
+            result = await self._ride_service.cancel_customer_ride(
+                self._user_id, parsed_id, self.ride_context
+            )
+            observation.update(metadata={"cancellation_result": result.status.value})
+        if result.status is CancellationResultStatus.CONFIRMATION_REQUIRED:
+            return "Explicit cancellation confirmation is required for this ride."
+        if result.status is CancellationResultStatus.NOT_FOUND:
+            return "No matching ride was found for this customer."
+        if result.status is CancellationResultStatus.NOT_CANCELLABLE:
+            state = result.ride.status.value if result.ride else "not cancellable"
+            return f"The ride is currently {state} and cannot be cancelled."
+        if result.status is CancellationResultStatus.RACE_LOST:
+            state = result.ride.status.value if result.ride else "unavailable"
+            return f"The ride is now {state}, so cancellation was not applied."
+        if result.status is CancellationResultStatus.IDEMPOTENT_SUCCESS:
+            return "This ride was already cancelled. Final customer cost is INR 0."
+        return "Ride cancelled successfully. Final customer cost is INR 0."
 
     @function_tool
     async def record_booking_confirmation(self, explicitly_confirmed: bool) -> str:

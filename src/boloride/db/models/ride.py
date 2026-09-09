@@ -46,6 +46,15 @@ class Ride(Base):
             "AND fare_amount IS NOT NULL AND fare_currency IS NOT NULL",
             name="ck_rides_status_fields",
         ),
+        CheckConstraint(
+            "final_customer_cost IS NULL OR final_customer_cost >= 0",
+            name="ck_rides_final_customer_cost_nonnegative",
+        ),
+        CheckConstraint(
+            "status <> 'cancelled' OR "
+            "(final_customer_cost IS NOT NULL AND final_customer_cost = 0)",
+            name="ck_rides_cancelled_zero_cost",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -87,6 +96,7 @@ class Ride(Base):
     booked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     fare_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     fare_currency: Mapped[str | None] = mapped_column(String(3))
+    final_customer_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

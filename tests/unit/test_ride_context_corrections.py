@@ -48,3 +48,18 @@ def test_passenger_change_invalidates_ineligible_vehicle_and_confirmation():
     assert context.passenger_count_source is PassengerCountSource.USER_PROVIDED
     assert context.selected_vehicle_type_code is None
     assert context.user_confirmed is False
+
+
+def test_cancellation_confirmation_is_bound_to_exact_target_and_cleared():
+    context = RideContext(session_id="test", caller_id=uuid.uuid4())
+    first, second = uuid.uuid4(), uuid.uuid4()
+    context.select_cancellation_target(first)
+    context.record_cancellation_confirmation(first, True)
+    assert context.cancellation_is_confirmed_for(first)
+
+    context.select_cancellation_target(second)
+    assert not context.cancellation_is_confirmed_for(first)
+    assert not context.cancellation_is_confirmed_for(second)
+    context.record_cancellation_confirmation(second, False)
+    assert context.cancellation_target_ride_id is None
+    assert context.cancellation_confirmed_ride_id is None

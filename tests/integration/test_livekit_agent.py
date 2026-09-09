@@ -62,6 +62,10 @@ def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
         locations=locations,
         saved_places=SimpleNamespace(list_places=AsyncMock(return_value=[])),
         rides=SimpleNamespace(list_for_customer=AsyncMock(return_value=[])),
+        ride_service=SimpleNamespace(
+            get_customer_ride_status=AsyncMock(return_value=None),
+            cancel_customer_ride=AsyncMock(),
+        ),
         booking=ConfirmationGuard(),
         quotes=SimpleNamespace(
             confirm_quote=lambda context, quote_id: context.confirm_quote(quote_id),
