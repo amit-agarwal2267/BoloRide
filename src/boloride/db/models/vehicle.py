@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +15,7 @@ class Vehicle(Base):
             "registration_number ~ '^(RJ|UP|MP|PB)[0-9]{2}[A-Z]{2}[0-9]{4}$'",
             name="ck_vehicles_synthetic_registration_format",
         ),
+        UniqueConstraint("id", "driver_id", name="uq_vehicles_id_driver_id"),
         Index("ix_vehicles_vehicle_type_code", "vehicle_type_code"),
     )
 

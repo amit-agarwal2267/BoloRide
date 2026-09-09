@@ -2,10 +2,12 @@ from collections import Counter
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from boloride.db.models.driver import Driver
 from boloride.db.models.vehicle import Vehicle
+from boloride.db.models.vehicle_type import VehicleType
 from boloride.domain.models.fleet import DemoFleetMember, DriverAvailability
 
 
@@ -32,16 +34,32 @@ class FleetRepository:
         rows = await self._session.execute(
             select(Driver, Vehicle)
             .join(Vehicle, Vehicle.driver_id == Driver.id)
+            .join(VehicleType, VehicleType.code == Vehicle.vehicle_type_code)
             .where(
                 Driver.availability == DriverAvailability.AVAILABLE,
                 Driver.state == state,
                 Driver.city == city,
                 Vehicle.vehicle_type_code == vehicle_type_code,
                 Vehicle.active.is_(True),
+                VehicleType.active.is_(True),
+                Driver.seed_version.is_not(None),
             )
             .order_by(Driver.id)
+            .limit(100)
         )
         return list(rows.tuples())
+
+    async def claim_available_driver(self, driver_id: UUID) -> Driver | None:
+        result = await self._session.execute(
+            update(Driver)
+            .where(
+                Driver.id == driver_id,
+                Driver.availability == DriverAvailability.AVAILABLE,
+            )
+            .values(availability=DriverAvailability.ASSIGNED)
+            .returning(Driver)
+        )
+        return result.scalar_one_or_none()
 
     async def seeded_counts(self, seed_version: str) -> tuple[int, int]:
         driver_count = await self._session.scalar(

@@ -172,9 +172,9 @@ class RideService:
                 await self._driver_assignments.release_assignment_idempotently(ride_id)
             except Exception as exc:
                 logger.warning(
-                    "driver_assignment_release_failed",
+                    "driver_release_failed",
                     extra={
-                        "event": "driver_assignment_release_failed",
+                        "event": "driver_release_failed",
                         "session_id": context.session_id,
                         "error_type": type(exc).__name__,
                     },
