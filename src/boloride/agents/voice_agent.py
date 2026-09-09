@@ -11,6 +11,7 @@ from boloride.agents.context import RideContext
 from boloride.agents.instructions import build_agent_instructions
 from boloride.domain.exceptions import DomainValidationError, LocationProviderError
 from boloride.domain.models.location import ResolvedLocation
+from boloride.domain.models.booking import BookingResultStatus
 from boloride.integrations.langfuse.tracing import LangfuseTracer
 from boloride.repositories.ride_repository import RideRepository
 from boloride.services.booking_service import BookingService
@@ -259,11 +260,12 @@ class BoloRideAgent(Agent):
                 outcome = await self._booking.book_ride(
                     self._user_id, self.ride_context
                 )
-                await self._database_session.commit()
                 observation.update(
                     metadata={
-                        "success": True,
-                        "provider": outcome.provider_result.provider,
+                        "success": outcome.status
+                        in {BookingResultStatus.SUCCESS, BookingResultStatus.IDEMPOTENT_SUCCESS},
+                        "booking_result": outcome.status.value,
+                        "provider": getattr(outcome.provider_result, "provider", None),
                     }
                 )
         except DomainValidationError as exc:
@@ -281,8 +283,21 @@ class BoloRideAgent(Agent):
                     "error_type": type(exc).__name__,
                 },
             )
-            return "Booking provider is temporarily unavailable. No booking was saved."
+            return "We're still confirming whether the booking went through."
+        if outcome.status in {
+            BookingResultStatus.OUTCOME_UNKNOWN,
+            BookingResultStatus.IN_PROGRESS,
+        }:
+            return "We're still confirming whether the booking went through."
+        if outcome.status is BookingResultStatus.REQUOTE_REQUIRED:
+            self.ride_context.user_confirmed = False
+            return "The previous booking authorization can no longer be retried safely. A new fare estimate and confirmation are required."
+        if outcome.status is BookingResultStatus.DEFINITIVE_FAILURE:
+            self.ride_context.user_confirmed = False
+            return "The booking provider confirmed that no ride was booked."
         result = outcome.provider_result
+        if result is None or outcome.accepted_quote is None:
+            return "We're still confirming whether the booking went through."
         return (
             f"Booking successful. ID {result.provider_booking_id}. "
             f"Driver {result.driver_name}; vehicle {result.vehicle_description}; "

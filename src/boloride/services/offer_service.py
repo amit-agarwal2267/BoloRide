@@ -38,7 +38,8 @@ class OfferService:
         for row in await self._offers.list_effective(checked_at):
             details = self._details(row)
             pending, consumed = await self._offers.usage_counts(customer_id, row.id)
-            if details.currency == currency and pending + consumed < details.maximum_redemptions_per_customer:
+            reserved = await self._offers.reserved_attempt_count(customer_id, row.id)
+            if details.currency == currency and pending + consumed + reserved < details.maximum_redemptions_per_customer:
                 eligible.append(details)
         logger.info("offer_eligibility_evaluated", extra={"event": "offer_eligibility_evaluated", "eligible_offer_count": len(eligible)})
         return tuple(eligible)
@@ -112,6 +113,16 @@ class OfferService:
             raise
         logger.info("offer_redemption_pending", extra={"event": "offer_redemption_pending", "offer_code": offer.code, "ride_id": str(ride_id)})
 
+    async def reserve_booking_attempt(
+        self, customer_id: UUID, offer: Offer, quote_id: UUID
+    ) -> bool:
+        return await self._offers.reserve_attempt_capacity(customer_id, offer, quote_id)
+
+    async def convert_attempt_reservation(
+        self, customer_id: UUID, offer_id: UUID, ride_id: UUID
+    ) -> None:
+        await self._offers.create_pending_from_reservation(customer_id, offer_id, ride_id)
+
     async def finalize_redemption(self, customer_id: UUID, ride_id: UUID, ride_status) -> None:
         if ride_status.value == "completed":
             _, changed = await self._offers.finalize_for_ride(customer_id, ride_id, RedemptionStatus.CONSUMED)
@@ -129,7 +140,8 @@ class OfferService:
         details = self._details(row)
         checked_at = now or datetime.now(UTC)
         pending, consumed = await self._offers.usage_counts(customer_id, row.id)
-        if not details.is_effective(checked_at) or details.currency != currency or pending + consumed >= details.maximum_redemptions_per_customer:
+        reserved = await self._offers.reserved_attempt_count(customer_id, row.id)
+        if not details.is_effective(checked_at) or details.currency != currency or pending + consumed + reserved >= details.maximum_redemptions_per_customer:
             raise DomainValidationError("offer is not eligible")
         return details
 

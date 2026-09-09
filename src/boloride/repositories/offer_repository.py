@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from boloride.db.models.accepted_quote import AcceptedQuote
+from boloride.db.models.booking_attempt import BookingAttempt
 from boloride.db.models.offer import Offer
 from boloride.db.models.offer_redemption import OfferRedemption
 from boloride.db.models.user import User
@@ -60,10 +61,35 @@ class OfferRepository:
         counts = dict(rows.all())
         return int(counts.get(RedemptionStatus.PENDING.value, 0)), int(counts.get(RedemptionStatus.CONSUMED.value, 0))
 
+    async def reserved_attempt_count(self, customer_id: UUID, offer_id: UUID) -> int:
+        return int(await self._session.scalar(
+            select(func.count()).select_from(BookingAttempt).where(
+                BookingAttempt.customer_id == customer_id,
+                BookingAttempt.offer_id == offer_id,
+                BookingAttempt.capacity_reserved.is_(True),
+            )
+        ) or 0)
+
+    async def reserve_attempt_capacity(
+        self, customer_id: UUID, offer: Offer, quote_id: UUID
+    ) -> bool:
+        await self._session.scalar(select(User.id).where(User.id == customer_id).with_for_update())
+        existing = await self._session.scalar(
+            select(BookingAttempt.id).where(BookingAttempt.quote_id == quote_id)
+        )
+        if existing is not None:
+            return False
+        pending, consumed = await self.usage_counts(customer_id, offer.id)
+        reserved = await self.reserved_attempt_count(customer_id, offer.id)
+        if pending + consumed + reserved >= offer.maximum_redemptions_per_customer:
+            raise DomainValidationError("offer redemption capacity has been reached")
+        return True
+
     async def create_pending(self, customer_id: UUID, offer: Offer, ride_id: UUID) -> OfferRedemption:
         await self._session.scalar(select(User.id).where(User.id == customer_id).with_for_update())
         pending, consumed = await self.usage_counts(customer_id, offer.id)
-        if pending + consumed >= offer.maximum_redemptions_per_customer:
+        reserved = await self.reserved_attempt_count(customer_id, offer.id)
+        if pending + consumed + reserved >= offer.maximum_redemptions_per_customer:
             raise DomainValidationError("offer redemption capacity has been reached")
         accepted_quote_id = await self._session.scalar(select(AcceptedQuote.id).where(AcceptedQuote.ride_id == ride_id))
         if accepted_quote_id is None:
@@ -71,6 +97,30 @@ class OfferRepository:
         redemption = OfferRedemption(
             offer_id=offer.id, customer_id=customer_id, ride_id=ride_id,
             accepted_quote_id=accepted_quote_id, status=RedemptionStatus.PENDING.value,
+        )
+        self._session.add(redemption)
+        await self._session.flush()
+        return redemption
+
+    async def create_pending_from_reservation(
+        self, customer_id: UUID, offer_id: UUID, ride_id: UUID
+    ) -> OfferRedemption:
+        existing = await self._session.scalar(
+            select(OfferRedemption).where(OfferRedemption.ride_id == ride_id)
+        )
+        if existing is not None:
+            return existing
+        accepted_quote_id = await self._session.scalar(
+            select(AcceptedQuote.id).where(AcceptedQuote.ride_id == ride_id)
+        )
+        if accepted_quote_id is None:
+            raise DomainValidationError("accepted quote is required for offer redemption")
+        redemption = OfferRedemption(
+            offer_id=offer_id,
+            customer_id=customer_id,
+            ride_id=ride_id,
+            accepted_quote_id=accepted_quote_id,
+            status=RedemptionStatus.PENDING.value,
         )
         self._session.add(redemption)
         await self._session.flush()
