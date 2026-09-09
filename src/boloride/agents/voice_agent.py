@@ -16,6 +16,7 @@ from boloride.repositories.ride_repository import RideRepository
 from boloride.services.booking_service import BookingService
 from boloride.services.location_service import LocationService
 from boloride.services.quote_service import QuoteService
+from boloride.services.offer_service import OfferService
 from boloride.services.saved_place_service import SavedPlaceService
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class BoloRideAgent(Agent):
         rides: RideRepository,
         booking: BookingService,
         quotes: QuoteService,
+        offers: OfferService,
         tracer: LangfuseTracer,
         default_city: str | None,
         default_state: str | None,
@@ -50,6 +52,7 @@ class BoloRideAgent(Agent):
         self._rides = rides
         self._booking = booking
         self._quotes = quotes
+        self._offers = offers
         self._tracer = tracer
         self._default_city = default_city
         self._default_state = default_state
@@ -193,6 +196,36 @@ class BoloRideAgent(Agent):
         self.ride_context.confirmed_quote_id = None
         self.ride_context.user_confirmed = False
         return "Confirmation declined. Do not create the booking."
+
+    @function_tool
+    async def get_available_offers(self) -> str:
+        """Return offers the backend currently considers eligible."""
+        currency = self.ride_context.current_quote.pricing.currency if self.ride_context.current_quote else "INR"
+        with self._tracer.observe("offer_eligibility", observation_type="tool", correlation_id=self.ride_context.session_id, metadata=self._trace_metadata("get_available_offers")) as observation:
+            offers = await self._offers.get_eligible_offers(self._user_id, currency)
+            observation.update(metadata={"eligible_offer_count": len(offers), "offer_codes": [offer.code for offer in offers]})
+        if not offers:
+            return "No eligible offers are currently available."
+        return "\n".join(f"{offer.code}: {offer.display_name}" for offer in offers)
+
+    @function_tool
+    async def apply_offer(self, offer_code: str) -> str:
+        """Apply one backend-validated offer to create a fresh estimate."""
+        try:
+            with self._tracer.observe("offer_application", observation_type="tool", correlation_id=self.ride_context.session_id, metadata={**self._trace_metadata("apply_offer"), "offer_code": offer_code.strip().upper()}):
+                quote = await self._offers.apply_offer(self._user_id, self.ride_context, offer_code)
+        except DomainValidationError as exc:
+            return f"Offer could not be applied: {exc}."
+        return f"Offer applied. New estimated fare: {quote.pricing.currency} {quote.pricing.estimated_total:.0f}. Fresh confirmation is required."
+
+    @function_tool
+    async def remove_applied_offer(self) -> str:
+        """Remove the current offer by producing a fresh non-discounted estimate."""
+        try:
+            quote = await self._offers.remove_offer(self.ride_context)
+        except DomainValidationError as exc:
+            return f"Offer could not be removed: {exc}."
+        return f"Offer removed. New estimated fare: {quote.pricing.currency} {quote.pricing.estimated_total:.0f}. Fresh confirmation is required."
 
     @function_tool
     async def create_fare_quote(self) -> str:

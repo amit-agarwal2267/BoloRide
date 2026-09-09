@@ -67,6 +67,7 @@ def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
             confirm_quote=lambda context, quote_id: context.confirm_quote(quote_id),
             create_quote=AsyncMock(),
         ),
+        offers=SimpleNamespace(get_eligible_offers=AsyncMock(return_value=[])),
         tracer=NullTracer(),  # type: ignore[arg-type]
         default_city="Kota",
         default_state="Rajasthan",

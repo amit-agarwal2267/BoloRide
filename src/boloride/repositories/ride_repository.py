@@ -76,8 +76,7 @@ class RideRepository:
             (item.amount for item in pricing.components if item.component_type is FareComponentType.TOLL_ESTIMATE),
             None,
         )
-        self._session.add(
-            AcceptedQuote(
+        snapshot = AcceptedQuote(
                 ride_id=ride.id,
                 pricing_rule_id=pricing.pricing_rule_id,
                 vehicle_type_code=pricing.vehicle_type_code,
@@ -95,8 +94,18 @@ class RideRepository:
                 currency=normalized_currency,
                 quoted_at=accepted_quote.quoted_at,
                 request_fingerprint=accepted_quote.request_fingerprint,
-            )
+                pre_discount_estimated_total=pricing.pre_discount_estimated_total or pricing.estimated_total,
+                offer_id=pricing.applied_offer.offer_id if pricing.applied_offer else None,
+                offer_code=pricing.applied_offer.code if pricing.applied_offer else None,
+                offer_display_name=pricing.applied_offer.display_name if pricing.applied_offer else None,
+                offer_discount_type=pricing.applied_offer.discount_type.value if pricing.applied_offer else None,
+                offer_percentage=pricing.applied_offer.percentage if pricing.applied_offer else None,
+                offer_maximum_discount=pricing.applied_offer.maximum_discount if pricing.applied_offer else None,
+                offer_discount_amount=pricing.applied_offer.discount_amount if pricing.applied_offer else None,
+                offer_currency=pricing.applied_offer.currency if pricing.applied_offer else None,
+                offer_version=pricing.applied_offer.version if pricing.applied_offer else None,
         )
+        self._session.add(snapshot)
         await self._session.flush()
         return ride
 

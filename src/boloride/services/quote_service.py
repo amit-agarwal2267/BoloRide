@@ -31,6 +31,12 @@ class QuoteService:
         return quote
 
     async def require_bookable_quote(self, context: RideContext, *, now: datetime | None = None) -> Quote:
+        quote = await self.require_current_quote(context, now=now)
+        if context.confirmed_quote_id != quote.id:
+            raise DomainValidationError("explicit confirmation for the current quote is required")
+        return quote
+
+    async def require_current_quote(self, context: RideContext, *, now: datetime | None = None) -> Quote:
         if not context.session_active:
             raise DomainValidationError("quote is not valid for this active session")
         quote = context.current_quote
@@ -47,8 +53,6 @@ class QuoteService:
             raise DomainValidationError("fare quote no longer matches the ride request")
         if not await self._pricing.is_rule_active(quote.pricing.pricing_rule_id):
             raise DomainValidationError("fare quote pricing rule is no longer active")
-        if context.confirmed_quote_id != quote.id:
-            raise DomainValidationError("explicit confirmation for the current quote is required")
         return quote
 
     @staticmethod
