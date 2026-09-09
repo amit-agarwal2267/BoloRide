@@ -13,6 +13,7 @@ from boloride.domain.exceptions import DomainValidationError, LocationProviderEr
 from boloride.domain.models.location import ResolvedLocation
 from boloride.domain.models.booking import BookingResultStatus
 from boloride.domain.models.cancellation import CancellationResultStatus
+from boloride.domain.models.dispatch import DispatchResultStatus
 from boloride.domain.enums import RideStatus
 from boloride.integrations.langfuse.tracing import LangfuseTracer
 from boloride.repositories.ride_repository import RideRepository
@@ -21,6 +22,7 @@ from boloride.services.location_service import LocationService
 from boloride.services.quote_service import QuoteService
 from boloride.services.offer_service import OfferService
 from boloride.services.ride_service import RideService
+from boloride.services.dispatch_service import DispatchService
 from boloride.services.saved_place_service import SavedPlaceService
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ class BoloRideAgent(Agent):
         saved_places: SavedPlaceService,
         rides: RideRepository,
         ride_service: RideService,
+        dispatch: DispatchService,
         booking: BookingService,
         quotes: QuoteService,
         offers: OfferService,
@@ -56,6 +59,7 @@ class BoloRideAgent(Agent):
         self._saved_places = saved_places
         self._rides = rides
         self._ride_service = ride_service
+        self._dispatch = dispatch
         self._booking = booking
         self._quotes = quotes
         self._offers = offers
@@ -212,12 +216,40 @@ class BoloRideAgent(Agent):
             if details.final_customer_cost is not None
             else ""
         )
+        assignment = (
+            f" Driver: {details.driver_display_name}; vehicle: "
+            f"{details.vehicle_display_name} {details.vehicle_registration}."
+            if details.driver_display_name else ""
+        )
         return (
             f"Ride to {details.destination} at {details.requested_ride_at.isoformat()} "
             f"is {details.status.value}. Vehicle type: {details.vehicle_type_code}. "
             f"Booked estimate: {details.currency} {details.estimated_fare:.0f}."
-            f"{final_cost}"
+            f"{final_cost}{assignment}"
         )
+
+    @function_tool
+    async def dispatch_booked_ride(self, ride_id: str) -> str:
+        """Deterministically assign the nearest eligible demo driver."""
+        try:
+            parsed_id = UUID(ride_id)
+        except ValueError:
+            return "That ride ID is invalid."
+        with self._tracer.observe(
+            "dispatch_ride",
+            observation_type="tool",
+            correlation_id=self.ride_context.session_id,
+            metadata=self._trace_metadata("dispatch_booked_ride"),
+        ) as observation:
+            result = await self._dispatch.dispatch(self._user_id, parsed_id)
+            observation.update(metadata={"dispatch_result": result.status.value})
+        if result.status is DispatchResultStatus.ASSIGNED:
+            return "A driver has been assigned to this ride."
+        if result.status is DispatchResultStatus.ALREADY_ASSIGNED:
+            return "This ride already has an assigned driver."
+        if result.status is DispatchResultStatus.NO_DRIVER_AVAILABLE:
+            return "No eligible driver is currently available; the booking remains booked."
+        return "The ride could not be dispatched in its current state."
 
     @function_tool
     async def select_ride_for_cancellation(self, ride_id: str) -> str:

@@ -8,6 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from boloride.db.models.ride import Ride
 from boloride.db.models.accepted_quote import AcceptedQuote
+from boloride.db.models.driver import Driver
+from boloride.db.models.ride_assignment import RideAssignment
+from boloride.db.models.vehicle import Vehicle
+from boloride.db.models.vehicle_type import VehicleType
 from boloride.domain.enums import RideStatus
 from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.location import ResolvedLocation
@@ -145,6 +149,20 @@ class RideRepository:
         if row is None:
             return None
         ride, quote = row
+        assignment_details = None
+        if ride.status in {RideStatus.ASSIGNED, RideStatus.ON_TRIP}:
+            assignment_details = (
+                await self._session.execute(
+                    select(Driver.name, Vehicle.registration_number, VehicleType.display_name)
+                    .join(Vehicle, Vehicle.driver_id == Driver.id)
+                    .join(VehicleType, VehicleType.code == Vehicle.vehicle_type_code)
+                    .join(RideAssignment, RideAssignment.vehicle_id == Vehicle.id)
+                    .where(
+                        RideAssignment.ride_id == ride.id,
+                        RideAssignment.released_at.is_(None),
+                    )
+                )
+            ).one_or_none()
         return RideStatusDetails(
             ride_id=ride.id,
             status=ride.status,
@@ -154,6 +172,9 @@ class RideRepository:
             estimated_fare=quote.estimated_total if quote else ride.fare_amount,
             currency=quote.currency if quote else ride.fare_currency,
             final_customer_cost=ride.final_customer_cost,
+            driver_display_name=assignment_details[0] if assignment_details else None,
+            vehicle_registration=assignment_details[1] if assignment_details else None,
+            vehicle_display_name=assignment_details[2] if assignment_details else None,
         )
 
     async def cancel_for_customer(

@@ -39,6 +39,7 @@ class JsonFormatter(logging.Formatter):
             "vehicle_count",
             "category_counts",
             "state_counts",
+            "vehicle_category",
         ):
             value = getattr(record, field, None)
             if value is not None:

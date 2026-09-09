@@ -5,9 +5,10 @@ from boloride.db.models.offer import Offer
 from boloride.db.models.offer_redemption import OfferRedemption
 from boloride.db.models.pricing_rule import PricingRule
 from boloride.db.models.ride import Ride
+from boloride.db.models.ride_assignment import RideAssignment
 from boloride.db.models.saved_place import SavedPlace
 from boloride.db.models.user import User
 from boloride.db.models.vehicle_type import VehicleType
 from boloride.db.models.vehicle import Vehicle
 
-__all__ = ["AcceptedQuote", "BookingAttempt", "Driver", "Offer", "OfferRedemption", "PricingRule", "Ride", "SavedPlace", "User", "Vehicle", "VehicleType"]
+__all__ = ["AcceptedQuote", "BookingAttempt", "Driver", "Offer", "OfferRedemption", "PricingRule", "Ride", "RideAssignment", "SavedPlace", "User", "Vehicle", "VehicleType"]

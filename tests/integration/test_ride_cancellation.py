@@ -228,5 +228,6 @@ async def test_customer_status_projection_is_current_and_safe(db_session: AsyncS
     assert set(details.__dataclass_fields__) == {
         "ride_id", "status", "destination", "requested_ride_at",
         "vehicle_type_code", "estimated_fare", "currency", "final_customer_cost",
+        "driver_display_name", "vehicle_registration", "vehicle_display_name",
     }
     assert await service.get_customer_ride_status(other.id, ride.id, verified_context(other.id)) is None

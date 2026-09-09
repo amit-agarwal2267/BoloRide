@@ -19,6 +19,8 @@ from boloride.llm.router import create_llm_router
 from boloride.observability.logger import configure_logging
 from boloride.prompts.registry import PromptKey, PromptRegistry
 from boloride.repositories.booking_attempt_repository import BookingAttemptRepository
+from boloride.repositories.assignment_repository import AssignmentRepository
+from boloride.repositories.fleet_repository import FleetRepository
 from boloride.repositories.ride_repository import RideRepository
 from boloride.repositories.pricing_rule_repository import PricingRuleRepository
 from boloride.repositories.offer_repository import OfferRepository
@@ -26,6 +28,7 @@ from boloride.repositories.saved_place_repository import SavedPlaceRepository
 from boloride.repositories.user_repository import UserRepository
 from boloride.repositories.vehicle_type_repository import VehicleTypeRepository
 from boloride.services.booking_service import BookingService
+from boloride.services.dispatch_service import DispatchService
 from boloride.services.location_service import LocationService
 from boloride.services.pricing_service import PricingService
 from boloride.services.quote_service import QuoteService
@@ -104,7 +107,14 @@ async def entrypoint(ctx: JobContext) -> None:
         PricingService(PricingRuleRepository(database_session)), locations
     )
     offers = OfferService(OfferRepository(database_session), quotes)
-    ride_service = RideService(database_session, rides, offers)
+    dispatch = DispatchService(
+        database_session,
+        rides,
+        FleetRepository(database_session),
+        AssignmentRepository(database_session),
+        offers,
+    )
+    ride_service = RideService(database_session, rides, offers, dispatch)
     prompt = PromptRegistry(
         langfuse,
         label=settings.langfuse_prompt_label,
@@ -125,6 +135,7 @@ async def entrypoint(ctx: JobContext) -> None:
         saved_places=saved_places,
         rides=rides,
         ride_service=ride_service,
+        dispatch=dispatch,
         booking=BookingService(
             database_session,
             rides,

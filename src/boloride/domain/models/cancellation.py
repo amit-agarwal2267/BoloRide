@@ -26,6 +26,9 @@ class RideStatusDetails:
     estimated_fare: Decimal
     currency: str
     final_customer_cost: Decimal | None
+    driver_display_name: str | None = None
+    vehicle_registration: str | None = None
+    vehicle_display_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
