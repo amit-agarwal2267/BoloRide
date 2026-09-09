@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from hashlib import sha256
 
 from boloride.domain.exceptions import DomainValidationError
 
@@ -16,6 +17,19 @@ class TollStatus(StrEnum):
     MAY_APPLY = "may_apply"
     NO_TOLL = "no_toll"
     UNKNOWN = "unknown"
+
+
+class LocationResolutionStatus(StrEnum):
+    RESOLVED = "resolved"
+    CLARIFICATION_REQUIRED = "clarification_required"
+    NOT_FOUND = "not_found"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+
+
+class LocationClarificationReason(StrEnum):
+    MISSING_CITY = "missing_city"
+    AMBIGUOUS_CANDIDATES = "ambiguous_candidates"
+    AMBIGUOUS_STATE = "ambiguous_state"
 
 
 _AIRPORT_PLACE_TYPES = frozenset({"airport", "international_airport"})
@@ -88,6 +102,8 @@ class ResolvedLocation:
     provider_place_id: str | None = None
     place_types: tuple[str, ...] | None = None
     country: str | None = None
+    city: str | None = None
+    state: str | None = None
 
     def __post_init__(self) -> None:
         address = self.address.strip()
@@ -113,6 +129,9 @@ class ResolvedLocation:
         object.__setattr__(self, "place_types", _normalize_place_types(self.place_types))
         country = " ".join(self.country.split()).casefold() if self.country else None
         object.__setattr__(self, "country", country or None)
+        for field_name in ("city", "state"):
+            value = getattr(self, field_name)
+            object.__setattr__(self, field_name, " ".join(value.split()) if value else None)
 
     @property
     def airport_classification(self) -> AirportClassification:
@@ -129,6 +148,7 @@ class LocationSearchContext:
     city: str | None = None
     state: str | None = None
     language: str | None = None
+    radius_meters: int | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("country", "city", "state", "language"):
@@ -138,6 +158,8 @@ class LocationSearchContext:
                 object.__setattr__(self, field_name, normalized or None)
         if self.country:
             object.__setattr__(self, "country", self.country.casefold())
+        if self.radius_meters is not None and self.radius_meters <= 0:
+            raise DomainValidationError("search radius must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +199,11 @@ class LocationCandidate:
     def airport_classification(self) -> AirportClassification:
         return classify_airport(self.place_types)
 
+    @property
+    def stable_candidate_id(self) -> str:
+        material = f"{self.provider}|{self.provider_place_id or ''}|{self.formatted_address}|{self.latitude}|{self.longitude}"
+        return sha256(material.encode()).hexdigest()[:20]
+
     def to_resolved_location(self) -> ResolvedLocation:
         return ResolvedLocation(
             address=self.formatted_address,
@@ -187,4 +214,22 @@ class LocationCandidate:
             provider_place_id=self.provider_place_id,
             place_types=self.place_types,
             country=self.country,
+            city=self.city,
+            state=self.state,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class LocationResolutionResult:
+    status: LocationResolutionStatus
+    location: ResolvedLocation | None = None
+    candidates: tuple[LocationCandidate, ...] = ()
+    clarification_reason: LocationClarificationReason | None = None
+    provider: str | None = None
+    fallback_used: bool = False
+
+    def __post_init__(self) -> None:
+        if self.status is LocationResolutionStatus.RESOLVED and self.location is None:
+            raise DomainValidationError("resolved result requires a location")
+        if len(self.candidates) > 3:
+            raise DomainValidationError("at most three location candidates may be exposed")

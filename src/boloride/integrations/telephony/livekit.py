@@ -1,5 +1,5 @@
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from livekit.agents import AgentServer, AgentSession, JobContext, cli, room_io
 from livekit.plugins import silero
@@ -36,6 +36,7 @@ from boloride.services.ride_service import RideService
 from boloride.services.offer_service import OfferService
 from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.user_service import UserService
+from boloride.services.time_resolution_service import TimeResolutionService
 from boloride.services.vehicle_service import VehicleService
 from boloride.speech.stt.router import STTRouter
 from boloride.speech.tts.router import TTSRouter
@@ -102,6 +103,8 @@ async def entrypoint(ctx: JobContext) -> None:
         max_candidates=settings.maps_max_candidates,
         default_country=settings.default_country,
         default_language=settings.default_language,
+        urban_radius_meters=settings.maps_urban_context_radius_meters,
+        rural_radius_meters=settings.maps_rural_context_radius_meters,
     )
     quotes = QuoteService(
         PricingService(PricingRuleRepository(database_session)), locations
@@ -153,6 +156,7 @@ async def entrypoint(ctx: JobContext) -> None:
         default_state=settings.default_state,
         default_country=settings.default_country,
         timezone=settings.default_timezone,
+        time_resolution=TimeResolutionService(lambda: datetime.now(UTC), settings.default_timezone),
     )
     ctx.add_shutdown_callback(shutdown)
     session = AgentSession(

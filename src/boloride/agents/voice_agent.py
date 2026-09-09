@@ -11,6 +11,8 @@ from boloride.agents.context import RideContext
 from boloride.agents.instructions import build_agent_instructions
 from boloride.domain.exceptions import DomainValidationError, LocationProviderError
 from boloride.domain.models.location import ResolvedLocation
+from boloride.domain.models.location import LocationResolutionStatus
+from boloride.domain.models.scheduling import TimeResolutionStatus
 from boloride.domain.models.booking import BookingResultStatus
 from boloride.domain.models.cancellation import CancellationResultStatus
 from boloride.domain.models.dispatch import DispatchResultStatus
@@ -24,6 +26,7 @@ from boloride.services.offer_service import OfferService
 from boloride.services.ride_service import RideService
 from boloride.services.dispatch_service import DispatchService
 from boloride.services.saved_place_service import SavedPlaceService
+from boloride.services.time_resolution_service import TimeResolutionService
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,7 @@ class BoloRideAgent(Agent):
         default_state: str | None,
         default_country: str,
         timezone: str,
+        time_resolution: TimeResolutionService | None = None,
     ) -> None:
         self.ride_context = context
         self._user_id = user_id
@@ -68,6 +72,9 @@ class BoloRideAgent(Agent):
         self._default_state = default_state
         self._default_country = default_country
         self._timezone = ZoneInfo(timezone)
+        self._time_resolution = time_resolution or TimeResolutionService(
+            lambda: datetime.now(self._timezone), timezone
+        )
         super().__init__(instructions=build_agent_instructions(base_prompt, context))
 
     def _trace_metadata(self, tool_name: str) -> dict[str, object]:
@@ -126,8 +133,20 @@ class BoloRideAgent(Agent):
         return f"Selected {role}: {location.display_name or location.address}. {self._state_summary()}"
 
     @function_tool
-    async def search_locations(self, query: str) -> str:
+    async def search_locations(
+        self, query: str, role: Literal["pickup", "destination"]
+    ) -> str:
         """Search maps and return numbered candidates; never invent a location."""
+        try:
+            saved = await self._saved_places.resolve_label(self._user_id, query)
+        except ValueError:
+            return "More than one saved place matches that label. Ask which one they mean."
+        if saved is not None:
+            self._set_location(role, saved)
+            logger.info("saved_place_resolved", extra={"event": "saved_place_resolved", "session_id": self.ride_context.session_id, "location_role": role})
+            return f"Selected saved {role}: {saved.display_name or saved.address}."
+        source = self.ride_context.pickup if role == "destination" else None
+        use_source_context = source is not None and _is_destination_shorthand(query)
         try:
             with self._tracer.observe(
                 "search_locations",
@@ -135,18 +154,29 @@ class BoloRideAgent(Agent):
                 correlation_id=self.ride_context.session_id,
                 metadata=self._trace_metadata("search_locations"),
             ):
-                candidates = await self._locations.search_locations(
+                result = await self._locations.resolve_query(
                     query,
-                    city=self._default_city,
-                    state=self._default_state,
+                    city=source.city if use_source_context else None,
+                    state=source.state if use_source_context else None,
                     country=self._default_country,
+                    require_city_context=not use_source_context,
                     session_id=self.ride_context.session_id,
                 )
         except LocationProviderError as exc:
             return f"Location search failed: {exc}. Ask the caller to clarify or try again."
-        self.ride_context.set_location_candidates(candidates)
+        if result.status is LocationResolutionStatus.RESOLVED and result.location:
+            self._set_location(role, result.location)
+            return f"Selected {role}: {result.location.display_name or result.location.address}."
+        if result.status is LocationResolutionStatus.PROVIDER_UNAVAILABLE:
+            return "Location providers are temporarily unavailable. Please try again."
+        if result.status is LocationResolutionStatus.NOT_FOUND:
+            return "No matching location was found. Ask for a more specific place."
+        if not result.candidates:
+            return "Please ask which city this location is in."
+        candidates = list(result.candidates)
+        self.ride_context.set_location_candidates(candidates, role)
         return "\n".join(
-            f"{index}. {candidate.display_name} — {candidate.formatted_address}"
+            f"{index}. {candidate.display_name}" + (f", {candidate.city}" if candidate.city else "") + (f", {candidate.state}" if candidate.state else "")
             for index, candidate in enumerate(candidates, start=1)
         )
 
@@ -156,6 +186,8 @@ class BoloRideAgent(Agent):
     ) -> str:
         """Select one numbered candidate returned by the most recent location search."""
         candidates = self.ride_context.location_candidates
+        if self.ride_context.location_candidate_role not in (None, role):
+            return "That candidate list belongs to a different location. Search again."
         if not 1 <= candidate_number <= len(candidates):
             return "Invalid candidate number. Search again or ask the caller to choose."
         location = await self._locations.resolve_candidate(
@@ -166,16 +198,23 @@ class BoloRideAgent(Agent):
         return f"Selected {role}: {location.display_name or location.address}. {self._state_summary()}"
 
     @function_tool
-    async def set_ride_time(self, iso_datetime: str) -> str:
-        """Set or replace the requested ride time as an ISO-8601 datetime."""
-        try:
-            value = datetime.fromisoformat(iso_datetime)
-        except ValueError:
-            return "Invalid datetime. Provide an ISO-8601 date and time."
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=self._timezone)
-        self.ride_context.update_ride_time(value)
-        return f"Ride time updated to {value.isoformat()}. Confirmation is now required. {self._state_summary()}"
+    async def set_ride_time(self, time_phrase: str, correction: bool = False) -> str:
+        """Resolve a bounded caller time phrase; never trust an LLM-generated datetime."""
+        result = self._time_resolution.resolve(
+            time_phrase, previous=self.ride_context.ride_time, correction=correction
+        )
+        if result.status is TimeResolutionStatus.CLARIFICATION_REQUIRED:
+            return f"Time clarification required: {result.clarification_reason}."
+        assert result.scheduled_at is not None
+        changed = self.ride_context.ride_time != result.scheduled_at
+        self.ride_context.update_ride_time(result.scheduled_at)
+        logger.info("time_resolved", extra={"event": "time_resolved", "session_id": self.ride_context.session_id, "resolution_type": result.resolution_type, "correction": correction})
+        if correction:
+            logger.info("time_correction", extra={"event": "time_correction", "session_id": self.ride_context.session_id})
+        if changed:
+            logger.info("scheduled_time_changed", extra={"event": "scheduled_time_changed", "session_id": self.ride_context.session_id})
+            logger.info("downstream_quote_invalidated", extra={"event": "downstream_quote_invalidated", "session_id": self.ride_context.session_id, "reason": "scheduled_time_changed"})
+        return f"Ride time updated to {result.scheduled_at.isoformat()}. Confirmation is now required. {self._state_summary()}"
 
     @function_tool
     async def get_previous_rides(self, limit: int = 3) -> str:
@@ -453,7 +492,18 @@ class BoloRideAgent(Agent):
     def _set_location(
         self, role: Literal["pickup", "destination"], location: ResolvedLocation
     ) -> None:
+        previous = self.ride_context.pickup if role == "pickup" else self.ride_context.destination
         if role == "pickup":
             self.ride_context.update_pickup(location)
         else:
             self.ride_context.update_destination(location)
+        self.ride_context.clear_location_candidates()
+        if previous is not None and previous != location:
+            logger.info("location_correction", extra={"event": "location_correction", "session_id": self.ride_context.session_id, "location_role": role})
+            logger.info("downstream_quote_invalidated", extra={"event": "downstream_quote_invalidated", "session_id": self.ride_context.session_id, "reason": f"{role}_changed"})
+
+
+def _is_destination_shorthand(query: str) -> bool:
+    words = query.casefold().split()
+    generic = {"station", "airport", "railway", "bus", "hospital", "mall"}
+    return len(words) <= 3 and bool(generic.intersection(words))

@@ -33,6 +33,7 @@ class RideContext:
 	session_active: bool = True
 	clarification_required: bool = False
 	location_candidates: tuple[LocationCandidate, ...] = ()
+	location_candidate_role: str | None = None
 
 	@property
 	def identity_verified(self) -> bool:
@@ -138,10 +139,12 @@ class RideContext:
 			self.selected_vehicle_type_code = code
 			self._invalidate_quote()
 
-	def set_location_candidates(self, candidates: list[LocationCandidate]) -> None:
+	def set_location_candidates(self, candidates: list[LocationCandidate], role: str | None = None) -> None:
 		self.location_candidates = tuple(candidates)
+		self.location_candidate_role = role
 		self.clarification_required = len(candidates) != 1
 
 	def clear_location_candidates(self) -> None:
 		self.location_candidates = ()
+		self.location_candidate_role = None
 		self.clarification_required = False

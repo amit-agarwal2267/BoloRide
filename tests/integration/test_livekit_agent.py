@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -11,6 +11,7 @@ from boloride.agents.context import RideContext
 from boloride.agents.voice_agent import BoloRideAgent
 from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.location import LocationCandidate
+from boloride.services.time_resolution_service import TimeResolutionService
 
 
 class NullTracer:
@@ -60,7 +61,7 @@ def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
         user_id=user_id,
         database_session=database_session,
         locations=locations,
-        saved_places=SimpleNamespace(list_places=AsyncMock(return_value=[])),
+        saved_places=SimpleNamespace(list_places=AsyncMock(return_value=[]), resolve_label=AsyncMock(return_value=None)),
         rides=SimpleNamespace(list_for_customer=AsyncMock(return_value=[])),
         ride_service=SimpleNamespace(
             get_customer_ride_status=AsyncMock(return_value=None),
@@ -78,6 +79,7 @@ def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
         default_state="Rajasthan",
         default_country="IN",
         timezone="Asia/Kolkata",
+        time_resolution=TimeResolutionService(lambda: datetime(2026, 9, 6, 12, tzinfo=UTC)),
     )
     return agent, context, database_session
 
@@ -85,7 +87,12 @@ def make_agent() -> tuple[BoloRideAgent, RideContext, AsyncMock]:
 @pytest.mark.asyncio
 async def test_ambiguous_location_then_correction_invalidates_confirmation() -> None:
     agent, context, _ = make_agent()
-    output = await agent.search_locations("Kota station")
+    locations = agent._locations
+    locations.resolve_query = AsyncMock(return_value=SimpleNamespace(
+        status=__import__("boloride.domain.models.location", fromlist=["LocationResolutionStatus"]).LocationResolutionStatus.CLARIFICATION_REQUIRED,
+        candidates=tuple(await locations.search_locations("Kota station")),
+    ))
+    output = await agent.search_locations("Kota station", "destination")
     assert "1. Kota Junction" in output
     assert "2. Dakaniya Talav" in output
     assert context.clarification_required is True
@@ -95,10 +102,10 @@ async def test_ambiguous_location_then_correction_invalidates_confirmation() -> 
     assert context.destination.provider_place_id == "place-1"
     assert context.clarification_required is False
 
-    await agent.set_ride_time("2026-09-07T07:00:00+05:30")
+    await agent.set_ride_time("tomorrow 7 AM")
     context.user_confirmed = True
-    await agent.set_ride_time("2026-09-07T06:30:00+05:30")
-    assert context.ride_time == datetime.fromisoformat("2026-09-07T06:30:00+05:30")
+    await agent.set_ride_time("6:30", correction=True)
+    assert context.ride_time == datetime.fromisoformat("2026-09-07T01:00:00+00:00")
     assert context.user_confirmed is False
 
 

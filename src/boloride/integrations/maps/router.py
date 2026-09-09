@@ -1,12 +1,17 @@
+import logging
+
 from boloride.config import Settings
 from boloride.domain.exceptions import (
     LocationConfigurationError,
+    LocationProviderError,
     RouteProviderError,
 )
-from boloride.domain.models.location import ResolvedLocation, RouteResult
+from boloride.domain.models.location import LocationCandidate, LocationSearchContext, ResolvedLocation, RouteResult
 from boloride.integrations.maps.base import MapsProvider
 from boloride.integrations.maps.google_maps import GoogleMapsProvider
 from boloride.integrations.maps.ola_maps import OlaMapsProvider
+
+logger = logging.getLogger(__name__)
 
 
 class MapsRouter:
@@ -47,6 +52,30 @@ class MapsRouter:
             providers.append(provider)
         self._route_providers = providers
         return providers
+
+    def get_search_providers(self) -> list[MapsProvider]:
+        """Return configured geocoders in the approved Ola -> Google order."""
+        return self.get_route_providers()
+
+    async def search_location(
+        self, query: str, context: LocationSearchContext
+    ) -> tuple[list[LocationCandidate], str | None, bool, bool]:
+        failures = 0
+        providers = self.get_search_providers()
+        for index, provider in enumerate(providers):
+            try:
+                candidates = await provider.search_location(query, context)
+            except LocationProviderError:
+                failures += 1
+                if index == 0:
+                    logger.warning("maps_primary_failed", extra={"event": "maps_primary_failed", "provider": provider.provider_name})
+                continue
+            if candidates:
+                if index > 0:
+                    logger.info("maps_fallback_used", extra={"event": "maps_fallback_used", "provider": provider.provider_name})
+                return candidates, provider.provider_name, index > 0, False
+            # A genuine no-result may still be provider-specific, so try fallback.
+        return [], None, False, bool(providers) and failures == len(providers)
 
     async def get_route(
         self, origin: ResolvedLocation, destination: ResolvedLocation

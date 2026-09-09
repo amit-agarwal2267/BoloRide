@@ -61,6 +61,8 @@ def settings(**overrides: object) -> Settings:
         "_env_file": None,
         "database_url": "postgresql+asyncpg://u:p@postgres/db",
         "langfuse_enabled": False,
+        "google_maps_api_key": None,
+        "ola_maps_api_key": None,
     }
     values.update(overrides)
     return Settings(**values)
