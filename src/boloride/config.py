@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     database_url: str
     database_connect_timeout_seconds: float = Field(default=3.0, gt=0)
+    provider_call_lease_seconds: int = Field(default=30, gt=0, le=300)
 
     langfuse_enabled: bool = False
     langfuse_host: str = "http://langfuse-web:3000"

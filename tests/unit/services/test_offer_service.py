@@ -37,9 +37,10 @@ def test_discount_quantizes_to_paise_before_cap_and_total_rounds_half_up():
 
 
 class Repo:
-    def __init__(self, row, pending=0, consumed=0): self.row, self.pending, self.consumed = row, pending, consumed
+    def __init__(self, row, pending=0, consumed=0, reserved=0): self.row, self.pending, self.consumed, self.reserved = row, pending, consumed, reserved
     async def list_effective(self, now): return [self.row] if self.row.active and self.row.effective_from <= now and (self.row.effective_until is None or now < self.row.effective_until) else []
     async def usage_counts(self, customer_id, offer_id): return self.pending, self.consumed
+    async def reserved_attempt_count(self, customer_id, offer_id): return self.reserved
     async def get_by_code(self, code): return self.row if code.upper() == self.row.code else None
     async def get_by_id(self, offer_id): return self.row if offer_id == self.row.id else None
 
@@ -61,9 +62,9 @@ def base_quote():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("pending", "consumed", "eligible"), [(0, 0, True), (0, 1, True), (0, 2, True), (0, 3, False), (1, 2, False)])
-async def test_eligibility_uses_pending_plus_consumed_capacity(pending, consumed, eligible):
-    service = OfferService(Repo(row(), pending, consumed))  # type: ignore[arg-type]
+@pytest.mark.parametrize(("pending", "consumed", "reserved", "eligible"), [(0, 0, 0, True), (0, 1, 0, True), (0, 2, 0, True), (0, 3, 0, False), (1, 2, 0, False), (0, 2, 1, False)])
+async def test_eligibility_counts_in_flight_attempt_reservations(pending, consumed, reserved, eligible):
+    service = OfferService(Repo(row(), pending, consumed, reserved))  # type: ignore[arg-type]
     result = await service.get_eligible_offers(uuid4(), "INR", now=datetime(2026, 9, 9, tzinfo=UTC))
     assert bool(result) is eligible
 

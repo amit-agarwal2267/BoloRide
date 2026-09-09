@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 
 from livekit.agents import AgentServer, AgentSession, JobContext, cli, room_io
 from livekit.plugins import silero
@@ -17,6 +18,7 @@ from boloride.integrations.rideprovider.mock_provider import MockRideProvider
 from boloride.llm.router import create_llm_router
 from boloride.observability.logger import configure_logging
 from boloride.prompts.registry import PromptKey, PromptRegistry
+from boloride.repositories.booking_attempt_repository import BookingAttemptRepository
 from boloride.repositories.ride_repository import RideRepository
 from boloride.repositories.pricing_rule_repository import PricingRuleRepository
 from boloride.repositories.offer_repository import OfferRepository
@@ -120,7 +122,16 @@ async def entrypoint(ctx: JobContext) -> None:
         locations=locations,
         saved_places=saved_places,
         rides=rides,
-        booking=BookingService(rides, MockRideProvider(), vehicles, quotes, offers),
+        booking=BookingService(
+            database_session,
+            rides,
+            BookingAttemptRepository(database_session),
+            MockRideProvider(),
+            vehicles,
+            quotes,
+            offers,
+            provider_call_lease=timedelta(seconds=settings.provider_call_lease_seconds),
+        ),
         quotes=quotes,
         offers=offers,
         tracer=tracer,
