@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     ola_maps_api_key: SecretStr | None = None
     maps_timeout_seconds: float = Field(default=10.0, gt=0)
     maps_max_candidates: int = Field(default=5, ge=1, le=40)
+    maps_urban_context_radius_meters: int = Field(default=1000, gt=0)
+    maps_rural_context_radius_meters: int = Field(default=20000, gt=0)
     default_city: str | None = None
     default_state: str | None = None
     default_country: str = "IN"

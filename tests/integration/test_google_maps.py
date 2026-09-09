@@ -4,18 +4,29 @@ import httpx
 import pytest
 
 from boloride.config import Settings
-from boloride.domain.exceptions import LocationProviderTimeoutError
+from boloride.domain.exceptions import (
+    LocationConfigurationError,
+    LocationProviderError,
+    LocationProviderTimeoutError,
+)
 from boloride.domain.models.location import AirportClassification, LocationSearchContext
 from boloride.integrations.maps.google_maps import GoogleMapsProvider
 
 
-def make_settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        database_url="postgresql+asyncpg://u:p@postgres/db",
-        langfuse_enabled=False,
-        google_maps_api_key="google-key",
-    )
+def make_settings(**overrides: object) -> Settings:
+    values = {
+        "_env_file": None,
+        "database_url": "postgresql+asyncpg://u:p@postgres/db",
+        "langfuse_enabled": False,
+        "google_maps_api_key": "google-key",
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def test_google_requires_key() -> None:
+    with pytest.raises(LocationConfigurationError, match="GOOGLE_MAPS_API_KEY"):
+        GoogleMapsProvider(make_settings(google_maps_api_key=None))
 
 
 @pytest.mark.asyncio
@@ -67,6 +78,33 @@ async def test_google_normalizes_timeout(httpx_mock) -> None:
     provider = GoogleMapsProvider(make_settings())
     with pytest.raises(LocationProviderTimeoutError):
         await provider.search_location("Kota")
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_google_normalizes_http_failure(httpx_mock) -> None:
+    httpx_mock.add_response(status_code=503)
+    provider = GoogleMapsProvider(make_settings())
+    with pytest.raises(LocationProviderError, match="status 503"):
+        await provider.search_location("Kota")
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_google_skips_malformed_candidates(httpx_mock) -> None:
+    httpx_mock.add_response(
+        json={
+            "places": [
+                {"displayName": {"text": "Missing coordinates"}},
+                {
+                    "displayName": {"text": "Missing address"},
+                    "location": {"latitude": 25.2, "longitude": 75.8},
+                },
+            ]
+        }
+    )
+    provider = GoogleMapsProvider(make_settings())
+    assert await provider.search_location("Kota") == []
     await provider.aclose()
 
 
