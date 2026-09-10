@@ -16,6 +16,7 @@ def settings(**overrides: object) -> Settings:
         "database_url": "postgresql+asyncpg://u:p@postgres/db",
         "langfuse_enabled": False,
         "assemblyai_api_key": "assembly-key",
+        "assemblyai_stt_model": "universal-streaming-multilingual",
         "stt_language": "hi",
     }
     values.update(overrides)

@@ -16,10 +16,18 @@ class CancellationResultStatus(StrEnum):
     RACE_LOST = "race_lost"
 
 
+class RideReferenceResolutionStatus(StrEnum):
+    RESOLVED = "resolved"
+    AMBIGUOUS = "ambiguous"
+    NOT_FOUND = "not_found"
+    RESOLVED_SET = "resolved_set"
+
+
 @dataclass(frozen=True, slots=True)
 class RideStatusDetails:
     ride_id: UUID
     status: RideStatus
+    pickup: str
     destination: str
     requested_ride_at: datetime
     vehicle_type_code: str | None
@@ -35,3 +43,15 @@ class RideStatusDetails:
 class CancellationResult:
     status: CancellationResultStatus
     ride: RideStatusDetails | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CancellationSetResult:
+    results: tuple[CancellationResult, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RideReferenceResolution:
+    status: RideReferenceResolutionStatus
+    ride: RideStatusDetails | None = None
+    candidates: tuple[RideStatusDetails, ...] = ()

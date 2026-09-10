@@ -5,12 +5,38 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from boloride.db.models.booking_attempt import BookingAttempt
+from boloride.db.models.user import User
 from boloride.domain.models.booking import BookingAttemptState
 
 
 class BookingAttemptRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def lock_customer(self, customer_id: UUID) -> None:
+        await self._session.scalar(
+            select(User.id).where(User.id == customer_id).with_for_update()
+        )
+
+    async def get_open_for_customer(
+        self, customer_id: UUID
+    ) -> BookingAttempt | None:
+        return await self._session.scalar(
+            select(BookingAttempt)
+            .where(
+                BookingAttempt.customer_id == customer_id,
+                BookingAttempt.state.in_(
+                    (
+                        BookingAttemptState.READY.value,
+                        BookingAttemptState.PROVIDER_CALLING.value,
+                        BookingAttemptState.PROVIDER_CONFIRMED.value,
+                        BookingAttemptState.OUTCOME_UNKNOWN.value,
+                    )
+                ),
+            )
+            .order_by(BookingAttempt.created_at.desc())
+            .limit(1)
+        )
 
     async def get_by_quote(self, quote_id: UUID, *, for_update: bool = False) -> BookingAttempt | None:
         statement = select(BookingAttempt).where(BookingAttempt.quote_id == quote_id)

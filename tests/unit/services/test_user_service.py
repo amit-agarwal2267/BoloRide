@@ -68,6 +68,46 @@ async def test_returning_name_match_uses_canonical_normalization(provided: str) 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored", "provided"),
+    [
+        ("amit agarwal", "अमित अग्रवाल"),
+        ("अमित अग्रवाल", "Amit Agarwal"),
+        ("rahul sharma", "राहुल शर्मा"),
+        ("सुनीता वर्मा", "Sunita Verma"),
+    ],
+)
+async def test_returning_name_matches_conservative_cross_script_equivalent(
+    stored: str, provided: str
+) -> None:
+    user = SimpleNamespace(id=uuid4(), normalized_name=stored)
+    result = await UserService(UserRepositoryStub(user)).resolve_returning_customer(  # type: ignore[arg-type]
+        "9876543210", provided
+    )
+    assert result.state is CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored", "provided"),
+    [
+        ("amit agarwal", "अजय अग्रवाल"),
+        ("अमित अग्रवाल", "Sumit Agarwal"),
+        ("aman sharma", "मन शर्मा"),
+    ],
+)
+async def test_cross_script_matching_rejects_clearly_different_names(
+    stored: str, provided: str
+) -> None:
+    user = SimpleNamespace(id=uuid4(), normalized_name=stored)
+    result = await UserService(UserRepositoryStub(user)).resolve_returning_customer(  # type: ignore[arg-type]
+        "9876543210", provided
+    )
+    assert result.state is CustomerIdentityState.NAME_MISMATCH
+    assert result.customer_id is None
+
+
+@pytest.mark.asyncio
 async def test_wrong_name_does_not_expose_customer_id() -> None:
     user = SimpleNamespace(id=uuid4(), normalized_name="amit agarwal")
     service = UserService(UserRepositoryStub(user))  # type: ignore[arg-type]

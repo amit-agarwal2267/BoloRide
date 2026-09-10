@@ -193,6 +193,45 @@ async def set_ride_status(database_url: str, ride_id: object, status: str) -> No
         await engine.dispose()
 
 
+async def insert_duplicate_active_rides(database_url: str) -> object:
+    engine = create_async_engine(database_url)
+    user_id = uuid4()
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(id, phone_number, name, normalized_name, age) VALUES "
+                    "(:id, '+919876543299', 'Duplicate Active', "
+                    "'duplicate active', 30)"
+                ),
+                {"id": user_id},
+            )
+            for index in range(2):
+                await connection.execute(
+                    text(
+                        "INSERT INTO rides "
+                        "(id, user_id, pickup_address, pickup_latitude, "
+                        "pickup_longitude, destination_address, "
+                        "destination_latitude, destination_longitude, "
+                        "requested_ride_at, status, confirmed_at, provider, "
+                        "provider_booking_id, booked_at, fare_amount, "
+                        "fare_currency) VALUES "
+                        "(:id, :user_id, 'Home', 25.18, 75.83, 'Station', "
+                        "25.22, 75.88, now(), 'booked', now(), 'mock', "
+                        ":provider_booking_id, now(), 100, 'INR')"
+                    ),
+                    {
+                        "id": uuid4(),
+                        "user_id": user_id,
+                        "provider_booking_id": f"duplicate-active-{index}",
+                    },
+                )
+        return user_id
+    finally:
+        await engine.dispose()
+
+
 def test_clean_database_upgrade_downgrade_and_reupgrade(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -208,8 +247,13 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
     try:
         command.upgrade(alembic_config, "head")
         revision, tables = asyncio.run(schema_state(test_url))
-        assert revision == "014"
+        assert revision == "015"
         assert {"users", "saved_places", "rides", "vehicle_types", "pricing_rules", "accepted_quotes", "offers", "offer_redemptions", "booking_attempts", "drivers", "vehicles", "ride_assignments"}.issubset(tables)
+
+        command.downgrade(alembic_config, "014")
+        assert asyncio.run(schema_state(test_url))[0] == "014"
+        command.upgrade(alembic_config, "015")
+        assert asyncio.run(schema_state(test_url))[0] == "015"
 
         command.downgrade(alembic_config, "013")
         revision, tables = asyncio.run(schema_state(test_url))
@@ -249,14 +293,14 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
         assert revision == "008"
         assert not {"pricing_rules", "accepted_quotes"}.intersection(tables)
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "014"
+        assert asyncio.run(schema_state(test_url))[0] == "015"
 
         command.downgrade(alembic_config, "007")
         revision, tables = asyncio.run(schema_state(test_url))
         assert revision == "007"
         assert "vehicle_types" not in tables
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "014"
+        assert asyncio.run(schema_state(test_url))[0] == "015"
 
         command.downgrade(alembic_config, "006")
         assert asyncio.run(schema_state(test_url))[0] == "006"
@@ -264,7 +308,7 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
             insert_complete_customer_and_ride(test_url, "booked")
         )
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "014"
+        assert asyncio.run(schema_state(test_url))[0] == "015"
         assert asyncio.run(ride_status(test_url, booked_ride_id)) == "booked"
 
         command.downgrade(alembic_config, "005")
@@ -275,7 +319,7 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
 
         asyncio.run(insert_phone_only_prototype_data(test_url))
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "014"
+        assert asyncio.run(schema_state(test_url))[0] == "015"
         columns, counts = asyncio.run(identity_schema_state(test_url))
         assert {"name", "normalized_name", "age"}.issubset(columns)
         assert counts == {"rides": 0, "saved_places": 0, "users": 0}
@@ -286,7 +330,7 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
         assert not {"users", "saved_places", "rides"}.intersection(tables)
 
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "014"
+        assert asyncio.run(schema_state(test_url))[0] == "015"
     finally:
         monkeypatch.setenv("DATABASE_URL", settings.database_url)
         get_settings.cache_clear()
@@ -317,7 +361,56 @@ def test_lifecycle_upgrade_fails_without_altering_legacy_rides(
 
         asyncio.run(delete_ride(test_url, ride_id))
         command.upgrade(alembic_config, "head")
+        assert asyncio.run(schema_state(test_url))[0] == "015"
+    finally:
+        monkeypatch.setenv("DATABASE_URL", settings.database_url)
+        get_settings.cache_clear()
+        asyncio.run(drop_database(admin_url, database_name))
+
+
+def test_single_active_ride_upgrade_fails_without_deleting_conflicts(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_url = make_url(settings.database_url)
+    database_name = f"boloride_test_{uuid4().hex}"
+    admin_url = source_url.set(database="postgres").render_as_string(
+        hide_password=False
+    )
+    test_url = source_url.set(database=database_name).render_as_string(
+        hide_password=False
+    )
+    alembic_config = Config(Path(__file__).resolve().parents[2] / "alembic.ini")
+
+    asyncio.run(create_database(admin_url, database_name))
+    monkeypatch.setenv("DATABASE_URL", test_url)
+    get_settings.cache_clear()
+    try:
+        command.upgrade(alembic_config, "014")
+        user_id = asyncio.run(insert_duplicate_active_rides(test_url))
+
+        with pytest.raises(Exception, match="duplicate active rides"):
+            command.upgrade(alembic_config, "015")
+
         assert asyncio.run(schema_state(test_url))[0] == "014"
+        engine = create_async_engine(test_url)
+
+        async def active_count() -> int:
+            try:
+                async with engine.connect() as connection:
+                    return int(
+                        await connection.scalar(
+                            text(
+                                "SELECT count(*) FROM rides WHERE user_id = :user_id "
+                                "AND status IN ('booked', 'assigned', 'on_trip')"
+                            ),
+                            {"user_id": user_id},
+                        )
+                        or 0
+                    )
+            finally:
+                await engine.dispose()
+
+        assert asyncio.run(active_count()) == 2
     finally:
         monkeypatch.setenv("DATABASE_URL", settings.database_url)
         get_settings.cache_clear()

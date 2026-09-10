@@ -57,9 +57,27 @@ async def test_pending_reserves_capacity_cancel_releases_and_completion_consumes
     user = await UserRepository(db_session).create("9876543298", "Offer User", 30)
     repo = OfferRepository(db_session); service = OfferService(repo)
     offer = await repo.get_by_code("NEW_CUSTOMER"); assert offer is not None
-    rides = []
-    for index in range(4):
-        rides.append(await create_discounted_ride(db_session, user.id, offer, index))
+    ride_repo = RideRepository(db_session)
+    cancelled = await create_discounted_ride(db_session, user.id, offer, 0)
+    assert await ride_repo.cancel_for_customer(
+        user.id, cancelled.id, expected_status=RideStatus.BOOKED
+    )
+    historical = []
+    for index in (2, 3):
+        completed = await create_discounted_ride(db_session, user.id, offer, index)
+        for current, requested in (
+            (RideStatus.BOOKED, RideStatus.ASSIGNED),
+            (RideStatus.ASSIGNED, RideStatus.ON_TRIP),
+            (RideStatus.ON_TRIP, RideStatus.COMPLETED),
+        ):
+            assert await ride_repo.transition_internal(
+                completed.id,
+                expected_status=current,
+                requested_status=requested,
+            )
+        historical.append(completed)
+    active = await create_discounted_ride(db_session, user.id, offer, 1)
+    rides = [cancelled, active, *historical]
     snapshot = await db_session.scalar(select(AcceptedQuote).where(AcceptedQuote.ride_id == rides[0].id))
     assert snapshot.offer_percentage == Decimal("10.00")
     await service.update_offer("NEW_CUSTOMER", percentage=Decimal("15.00"))

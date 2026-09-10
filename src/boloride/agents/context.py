@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from boloride.domain.models.location import LocationCandidate, ResolvedLocation
+from boloride.domain.models.location import LocationCandidate, ResolvedLocation, RouteResult
 from boloride.domain.models.quote import Quote
 from boloride.domain.models.vehicle import PassengerCountSource
 from boloride.domain.exceptions import DomainValidationError
@@ -20,6 +20,7 @@ class RideContext:
 	intent: str | None = None
 	pickup: ResolvedLocation | None = None
 	destination: ResolvedLocation | None = None
+	route: RouteResult | None = None
 	ride_time: datetime | None = None
 	passenger_count: int = 1
 	passenger_count_source: PassengerCountSource = PassengerCountSource.DEFAULT
@@ -32,10 +33,24 @@ class RideContext:
 	confirmed_quote_id: UUID | None = None
 	cancellation_target_ride_id: UUID | None = None
 	cancellation_confirmed_ride_id: UUID | None = None
+	cancellation_target_ride_ids: tuple[UUID, ...] = ()
+	cancellation_confirmed_ride_ids: tuple[UUID, ...] = ()
 	session_active: bool = True
 	clarification_required: bool = False
 	location_candidates: tuple[LocationCandidate, ...] = ()
 	location_candidate_role: str | None = None
+	pending_pickup_candidate: LocationCandidate | None = None
+	pending_destination_candidate: LocationCandidate | None = None
+	pickup_geography_city: str | None = None
+	pickup_geography_state: str | None = None
+	destination_geography_city: str | None = None
+	destination_geography_state: str | None = None
+	pickup_location_operation: int = 0
+	destination_location_operation: int = 0
+	pickup_clarification_count: int = 0
+	destination_clarification_count: int = 0
+	ride_reference_candidates: tuple[UUID, ...] = ()
+	ride_reference_purpose: str | None = None
 
 	@property
 	def identity_verified(self) -> bool:
@@ -101,7 +116,19 @@ class RideContext:
 	def select_cancellation_target(self, ride_id: UUID) -> None:
 		if self.cancellation_target_ride_id != ride_id:
 			self.cancellation_confirmed_ride_id = None
-		self.cancellation_target_ride_id = ride_id
+			self.cancellation_target_ride_id = ride_id
+			self.cancellation_target_ride_ids = (ride_id,)
+			self.cancellation_confirmed_ride_ids = ()
+
+	def select_cancellation_targets(self, ride_ids: tuple[UUID, ...]) -> None:
+		if not ride_ids:
+			raise DomainValidationError("at least one cancellation target is required")
+		if len(set(ride_ids)) != len(ride_ids):
+			raise DomainValidationError("cancellation targets must be unique")
+		self.cancellation_target_ride_ids = ride_ids
+		self.cancellation_confirmed_ride_ids = ()
+		self.cancellation_target_ride_id = ride_ids[0] if len(ride_ids) == 1 else None
+		self.cancellation_confirmed_ride_id = None
 
 	def record_cancellation_confirmation(
 		self, ride_id: UUID, explicitly_confirmed: bool
@@ -110,12 +137,25 @@ class RideContext:
 			raise DomainValidationError("cancellation confirmation must match the selected ride")
 		if explicitly_confirmed:
 			self.cancellation_confirmed_ride_id = ride_id
+			self.cancellation_confirmed_ride_ids = (ride_id,)
+		else:
+			self.clear_cancellation()
+
+	def record_cancellation_set_confirmation(
+		self, explicitly_confirmed: bool
+	) -> None:
+		if not self.cancellation_target_ride_ids:
+			raise DomainValidationError("cancellation targets are required")
+		if explicitly_confirmed:
+			self.cancellation_confirmed_ride_ids = self.cancellation_target_ride_ids
 		else:
 			self.clear_cancellation()
 
 	def clear_cancellation(self) -> None:
 		self.cancellation_target_ride_id = None
 		self.cancellation_confirmed_ride_id = None
+		self.cancellation_target_ride_ids = ()
+		self.cancellation_confirmed_ride_ids = ()
 
 	def cancellation_is_confirmed_for(self, ride_id: UUID) -> bool:
 		return (
@@ -124,15 +164,48 @@ class RideContext:
 			and self.cancellation_confirmed_ride_id == ride_id
 		)
 
+	def cancellation_set_is_confirmed_for(self, ride_ids: tuple[UUID, ...]) -> bool:
+		return (
+			self.session_active
+			and self.cancellation_target_ride_ids == ride_ids
+			and self.cancellation_confirmed_ride_ids == ride_ids
+		)
+
 	def update_pickup(self, pickup: ResolvedLocation | None) -> None:
 		if self.pickup != pickup:
 			self.pickup = pickup
+			self.route = None
 			self._invalidate_quote()
+		if pickup is not None:
+			if (
+				pickup.city
+				and self.pickup_geography_city
+				and pickup.city.casefold() != self.pickup_geography_city.casefold()
+			):
+				self.pickup_geography_state = None
+			self.remember_endpoint_geography("pickup", pickup.city, pickup.state)
+			self.pickup_clarification_count = 0
 
 	def update_destination(self, destination: ResolvedLocation | None) -> None:
 		if self.destination != destination:
 			self.destination = destination
+			self.route = None
 			self._invalidate_quote()
+		if destination is not None:
+			if (
+				destination.city
+				and self.destination_geography_city
+				and destination.city.casefold()
+				!= self.destination_geography_city.casefold()
+			):
+				self.destination_geography_state = None
+			self.remember_endpoint_geography(
+				"destination", destination.city, destination.state
+			)
+			self.destination_clarification_count = 0
+
+	def set_route(self, route: RouteResult) -> None:
+		self.route = route
 
 	def update_ride_time(self, ride_time: datetime | None) -> None:
 		if self.ride_time != ride_time:
@@ -162,9 +235,126 @@ class RideContext:
 	def set_location_candidates(self, candidates: list[LocationCandidate], role: str | None = None) -> None:
 		self.location_candidates = tuple(candidates)
 		self.location_candidate_role = role
-		self.clarification_required = len(candidates) != 1
+		self._refresh_location_clarification()
 
 	def clear_location_candidates(self) -> None:
 		self.location_candidates = ()
 		self.location_candidate_role = None
-		self.clarification_required = False
+		self._refresh_location_clarification()
+
+	def set_likely_location_candidate(
+		self, role: str, candidate: LocationCandidate
+	) -> None:
+		if role == "pickup":
+			self.pending_pickup_candidate = candidate
+		elif role == "destination":
+			self.pending_destination_candidate = candidate
+		else:
+			raise DomainValidationError("location role must be pickup or destination")
+		self._refresh_location_clarification()
+
+	def pending_location_candidate(self, role: str) -> LocationCandidate | None:
+		if role == "pickup":
+			return self.pending_pickup_candidate
+		if role == "destination":
+			return self.pending_destination_candidate
+		raise DomainValidationError("location role must be pickup or destination")
+
+	def clear_pending_location_candidate(self, role: str) -> None:
+		if role == "pickup":
+			self.pending_pickup_candidate = None
+		elif role == "destination":
+			self.pending_destination_candidate = None
+		else:
+			raise DomainValidationError("location role must be pickup or destination")
+		self._refresh_location_clarification()
+
+	def _refresh_location_clarification(self) -> None:
+		self.clarification_required = bool(
+			self.location_candidates
+			or self.pending_pickup_candidate
+			or self.pending_destination_candidate
+		)
+
+	def remember_endpoint_geography(
+		self, role: str, city: str | None, state: str | None
+	) -> None:
+		if role not in {"pickup", "destination"}:
+			raise DomainValidationError("location role must be pickup or destination")
+		prefix = "pickup" if role == "pickup" else "destination"
+		if city is not None:
+			setattr(self, f"{prefix}_geography_city", " ".join(city.split()) or None)
+		if state is not None:
+			setattr(self, f"{prefix}_geography_state", " ".join(state.split()) or None)
+
+	def endpoint_geography(self, role: str) -> tuple[str | None, str | None]:
+		if role == "pickup":
+			return self.pickup_geography_city, self.pickup_geography_state
+		if role == "destination":
+			return self.destination_geography_city, self.destination_geography_state
+		raise DomainValidationError("location role must be pickup or destination")
+
+	def begin_location_operation(self, role: str) -> int:
+		field_name = (
+			"pickup_location_operation"
+			if role == "pickup"
+			else "destination_location_operation"
+		)
+		if role not in {"pickup", "destination"}:
+			raise DomainValidationError("location role must be pickup or destination")
+		value = getattr(self, field_name) + 1
+		setattr(self, field_name, value)
+		return value
+
+	def location_operation_is_current(self, role: str, value: int) -> bool:
+		current = (
+			self.pickup_location_operation
+			if role == "pickup"
+			else self.destination_location_operation
+		)
+		if role not in {"pickup", "destination"}:
+			raise DomainValidationError("location role must be pickup or destination")
+		return current == value
+
+	def record_location_clarification(self, role: str) -> int:
+		field_name = (
+			"pickup_clarification_count"
+			if role == "pickup"
+			else "destination_clarification_count"
+		)
+		if role not in {"pickup", "destination"}:
+			raise DomainValidationError("location role must be pickup or destination")
+		value = getattr(self, field_name) + 1
+		setattr(self, field_name, value)
+		return value
+
+	@property
+	def booking_phase(self) -> str:
+		"""Derive conversational guidance without constraining user intent."""
+		if not self.identity_verified:
+			return "identity"
+		if self.pickup is None and self.pickup_geography_city is None:
+			return "geography"
+		if self.pickup is None or self.destination is None:
+			return "locations"
+		if self.ride_time is None:
+			return "time"
+		if self.selected_vehicle_type_code is None:
+			return "vehicle"
+		if self.current_quote is None:
+			return "quote"
+		if not self.confirmation_received:
+			return "confirmation"
+		if self.booking_id is None:
+			return "confirmation"
+		return "booked"
+
+	def set_ride_reference_candidates(
+		self, ride_ids: tuple[UUID, ...], purpose: str
+	) -> None:
+		self.ride_reference_candidates = ride_ids
+		self.ride_reference_purpose = purpose
+
+	def clear_ride_reference_candidates(self) -> None:
+		self.ride_reference_candidates = ()
+		self.ride_reference_purpose = None

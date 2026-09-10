@@ -1,4 +1,8 @@
 import re
+import unicodedata
+
+from indic_transliteration import sanscript
+from indic_transliteration.sanscript import transliterate
 
 from boloride.domain.exceptions import DomainValidationError
 
@@ -30,6 +34,62 @@ def normalize_customer_name(value: str) -> str:
     if not normalized:
         raise DomainValidationError("customer name cannot be blank")
     return normalized
+
+
+def customer_name_match_strategy(stored_name: str, provided_name: str) -> str:
+    """Compare exactly, with a restricted deterministic cross-script fallback."""
+    stored = normalize_customer_name(stored_name)
+    provided = normalize_customer_name(provided_name)
+    if stored == provided:
+        return "exact"
+    stored_script = _name_script(stored)
+    provided_script = _name_script(provided)
+    if {stored_script, provided_script} != {"devanagari", "latin"}:
+        return "none"
+    stored_key = _cross_script_name_key(stored, stored_script)
+    provided_key = _cross_script_name_key(provided, provided_script)
+    return "transliteration" if stored_key == provided_key else "none"
+
+
+def customer_names_match(stored_name: str, provided_name: str) -> bool:
+    return customer_name_match_strategy(stored_name, provided_name) != "none"
+
+
+def _name_script(value: str) -> str:
+    letters = {character for character in value if character.isalpha()}
+    if letters and all("\u0900" <= character <= "\u097f" for character in letters):
+        return "devanagari"
+    if letters and all("LATIN" in unicodedata.name(character, "") for character in letters):
+        return "latin"
+    return "other"
+
+
+def _cross_script_name_key(value: str, script: str) -> tuple[str, ...]:
+    romanized = (
+        transliterate(value, sanscript.DEVANAGARI, sanscript.ITRANS)
+        if script == "devanagari"
+        else value
+    )
+    words = normalize_customer_name(romanized).split()
+    return tuple(_phonetic_word_key(word) for word in words)
+
+
+def _phonetic_word_key(word: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", word)
+    ascii_word = "".join(
+        character
+        for character in decomposed
+        if not unicodedata.combining(character) and character.isascii()
+    ).casefold()
+    ascii_word = ascii_word.replace("w", "v")
+    # Common Latin renderings use e where deterministic Sanskrit
+    # transliteration emits an inherent a (for example, Verma/Varma).
+    ascii_word = ascii_word.replace("e", "a")
+    if ascii_word.endswith("a"):
+        ascii_word = ascii_word[:-1]
+    initial_a = ascii_word.startswith("a")
+    without_schwa = ascii_word.replace("a", "")
+    return ("a" if initial_a else "") + without_schwa
 
 
 def normalize_customer_age(value: int) -> int:

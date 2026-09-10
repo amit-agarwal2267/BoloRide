@@ -2,12 +2,15 @@ from decimal import Decimal
 
 import pytest
 
+from boloride.config import Settings
+from boloride.domain.exceptions import LocationProviderError
 from boloride.domain.models.location import (
     LocationCandidate,
     LocationClarificationReason,
     LocationResolutionStatus,
 )
 from boloride.services.location_service import LocationService
+from boloride.integrations.maps.router import MapsRouter
 
 
 def candidate(name: str, *, state: str = "Rajasthan", provider: str = "ola") -> LocationCandidate:
@@ -32,12 +35,27 @@ class Router:
 
 
 @pytest.mark.asyncio
-async def test_incomplete_address_without_city_requires_city_and_is_not_defaulted():
-    router = Router([])
-    result = await LocationService(router).resolve_query("A-95, Silicon City", require_city_context=True)
-    assert result.status is LocationResolutionStatus.CLARIFICATION_REQUIRED
-    assert result.clarification_reason is LocationClarificationReason.MISSING_CITY
-    assert router.context is None
+async def test_unknown_geography_searches_provider_without_city_or_state_bias():
+    value = LocationCandidate(
+        "Sarafa Bazaar",
+        "Sarafa Bazaar, Indore, India",
+        Decimal("22.72"),
+        Decimal("75.86"),
+        "ola",
+        "sarafa-indore",
+        city="Indore",
+        state="Madhya Pradesh",
+        country="India",
+    )
+    router = Router([value])
+
+    result = await LocationService(router).resolve_query("Sarafa Bazaar")
+
+    assert result.status is LocationResolutionStatus.LIKELY_MATCH_CONFIRMATION_REQUIRED
+    assert result.location is None
+    assert result.candidates == (value,)
+    assert router.context.city is None
+    assert router.context.state is None
 
 
 @pytest.mark.asyncio
@@ -68,3 +86,85 @@ def test_candidate_has_stable_internal_identifier():
     first = candidate("Station")
     second = candidate("Station")
     assert first.stable_candidate_id == second.stable_candidate_id
+
+
+@pytest.mark.asyncio
+async def test_provider_fallback_preserves_explicit_geography_context():
+    contexts = []
+
+    class Provider:
+        def __init__(self, name, fail=False):
+            self.provider_name = name
+            self.fail = fail
+
+        async def search_location(self, query, context):
+            contexts.append(context)
+            if self.fail:
+                raise LocationProviderError("unavailable")
+            return [candidate("A", provider=self.provider_name)]
+
+        async def enrich_candidate(self, value):
+            return value
+
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://u:p@postgres/db",
+        langfuse_enabled=False,
+        ola_maps_api_key="ola-test",
+        google_maps_api_key="google-test",
+    )
+    router = MapsRouter(settings)
+    router._route_providers = [  # type: ignore[assignment]
+        Provider("ola", fail=True),
+        Provider("google"),
+    ]
+
+    result = await LocationService(router).resolve_query(
+        "Indore Junction", city="Indore", state="Madhya Pradesh"
+    )
+
+    assert result.status is LocationResolutionStatus.RESOLVED
+    assert [(item.city, item.state) for item in contexts] == [
+        ("Indore", "Madhya Pradesh"),
+        ("Indore", "Madhya Pradesh"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_provider_fallback_preserves_unknown_geography_without_bias():
+    contexts = []
+
+    class Provider:
+        def __init__(self, name, fail=False):
+            self.provider_name = name
+            self.fail = fail
+
+        async def search_location(self, query, context):
+            contexts.append(context)
+            if self.fail:
+                raise LocationProviderError("unavailable")
+            return [candidate("Phoenix Citadel", provider=self.provider_name)]
+
+        async def enrich_candidate(self, value):
+            return value
+
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://u:p@postgres/db",
+        langfuse_enabled=False,
+        ola_maps_api_key="ola-test",
+        google_maps_api_key="google-test",
+    )
+    router = MapsRouter(settings)
+    router._route_providers = [  # type: ignore[assignment]
+        Provider("ola", fail=True),
+        Provider("google"),
+    ]
+
+    result = await LocationService(router).resolve_query("Phoenix Mall")
+
+    assert result.status is LocationResolutionStatus.LIKELY_MATCH_CONFIRMATION_REQUIRED
+    assert [(item.city, item.state) for item in contexts] == [
+        (None, None),
+        (None, None),
+    ]

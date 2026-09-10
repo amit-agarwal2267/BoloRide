@@ -14,7 +14,7 @@ from boloride.services.quote_service import QuoteService
 
 
 class Locations:
-    async def get_route(self, origin, destination): return RouteResult(1000, 100, "ola")
+    async def get_route(self, origin, destination, **kwargs): return RouteResult(1000, 100, "ola")
 
 
 class Pricing:
@@ -67,3 +67,15 @@ async def test_quote_a_confirmation_cannot_authorize_quote_b_or_disconnected_ses
     service.disconnect(ctx)
     with pytest.raises(DomainValidationError, match="active session"):
         await service.require_bookable_quote(ctx)
+
+
+@pytest.mark.asyncio
+async def test_vehicle_price_preview_reuses_route_without_persisting_quotes():
+    service = QuoteService(Pricing(), Locations())  # type: ignore[arg-type]
+    ctx = context()
+
+    previews = await service.preview_vehicle_prices(ctx, ("auto", "mini"))
+
+    assert [preview.vehicle_type_code for preview in previews] == ["auto", "mini"]
+    assert ctx.current_quote is None
+    assert ctx.route == RouteResult(1000, 100, "ola")

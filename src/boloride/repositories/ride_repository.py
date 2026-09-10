@@ -166,6 +166,7 @@ class RideRepository:
         return RideStatusDetails(
             ride_id=ride.id,
             status=ride.status,
+            pickup=ride.pickup_display_name or ride.pickup_address,
             destination=ride.destination_display_name or ride.destination_address,
             requested_ride_at=ride.requested_ride_at,
             vehicle_type_code=quote.vehicle_type_code if quote else None,
@@ -176,6 +177,52 @@ class RideRepository:
             vehicle_registration=assignment_details[1] if assignment_details else None,
             vehicle_display_name=assignment_details[2] if assignment_details else None,
         )
+
+    async def get_active_status_for_customer(
+        self, customer_id: UUID
+    ) -> RideStatusDetails | None:
+        ride_id = await self._session.scalar(
+            select(Ride.id)
+            .where(
+                Ride.user_id == customer_id,
+                Ride.status.in_(
+                    (RideStatus.BOOKED, RideStatus.ASSIGNED, RideStatus.ON_TRIP)
+                ),
+            )
+            .order_by(Ride.created_at.desc())
+            .limit(1)
+        )
+        if ride_id is None:
+            return None
+        return await self.get_status_for_customer(customer_id, ride_id)
+
+    async def list_status_for_customer(
+        self, customer_id: UUID, *, limit: int = 5
+    ) -> list[RideStatusDetails]:
+        rows = (
+            await self._session.execute(
+                select(Ride, AcceptedQuote)
+                .outerjoin(AcceptedQuote, AcceptedQuote.ride_id == Ride.id)
+                .where(Ride.user_id == customer_id)
+                .order_by(Ride.requested_ride_at.desc(), Ride.created_at.desc())
+                .limit(limit)
+            )
+        ).all()
+        return [
+            RideStatusDetails(
+                ride_id=ride.id,
+                status=ride.status,
+                pickup=ride.pickup_display_name or ride.pickup_address,
+                destination=ride.destination_display_name
+                or ride.destination_address,
+                requested_ride_at=ride.requested_ride_at,
+                vehicle_type_code=quote.vehicle_type_code if quote else None,
+                estimated_fare=quote.estimated_total if quote else ride.fare_amount,
+                currency=quote.currency if quote else ride.fare_currency,
+                final_customer_cost=ride.final_customer_cost,
+            )
+            for ride, quote in rows
+        ]
 
     async def cancel_for_customer(
         self, customer_id: UUID, ride_id: UUID, *, expected_status: RideStatus

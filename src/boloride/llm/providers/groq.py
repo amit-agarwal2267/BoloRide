@@ -10,7 +10,14 @@ from boloride.llm.base import (
     LLMRequestError,
     LLMTimeoutError,
 )
-from boloride.llm.models import LLMRequest, LLMResponse, LLMToolCall, ProviderName, TokenUsage
+from boloride.llm.models import (
+    LLMRequest,
+    LLMResponse,
+    LLMToolCall,
+    ProviderName,
+    TokenUsage,
+    unique_tool_call_id,
+)
 
 
 class GroqLLMProvider:
@@ -78,6 +85,12 @@ class GroqLLMProvider:
         choice = response.choices[0] if response.choices else None
         content = choice.message.content if choice is not None else None
         tool_calls = []
+        seen_call_ids = {
+            call.id
+            for message in request.messages
+            for call in (message.tool_calls or [])
+            if call.id.strip()
+        }
         import json
         if choice and choice.message.tool_calls:
             for tc in choice.message.tool_calls:
@@ -87,7 +100,7 @@ class GroqLLMProvider:
                     args = {}
                 tool_calls.append(
                     LLMToolCall(
-                        id=tc.id,
+                        id=unique_tool_call_id(tc.id, seen_call_ids),
                         name=tc.function.name,
                         arguments=args
                     )
