@@ -1,3 +1,5 @@
+import base64
+import binascii
 from time import perf_counter
 from typing import Any
 
@@ -11,7 +13,14 @@ from boloride.llm.base import (
     LLMRequestError,
     LLMTimeoutError,
 )
-from boloride.llm.models import LLMRequest, LLMResponse, LLMToolCall, ProviderName, TokenUsage
+from boloride.llm.models import (
+    LLMRequest,
+    LLMResponse,
+    LLMToolCall,
+    ProviderName,
+    TokenUsage,
+    unique_tool_call_id,
+)
 
 
 class GoogleLLMProvider:
@@ -51,10 +60,16 @@ class GoogleLLMProvider:
                     parts.append(types.Part.from_text(text=message.content))
                 if message.tool_calls:
                     for call in message.tool_calls:
-                        parts.append(types.Part.from_function_call(
+                        function_part = types.Part.from_function_call(
                             name=call.name,
                             args=call.arguments
-                        ))
+                        )
+                        signature = _google_thought_signature(call.provider_metadata)
+                        if signature is not None:
+                            function_part = function_part.model_copy(
+                                update={"thought_signature": signature}
+                            )
+                        parts.append(function_part)
                 contents.append(types.Content(role="model", parts=parts))
             else:
                 contents.append(types.Content(
@@ -83,15 +98,35 @@ class GoogleLLMProvider:
 
         content = None
         tool_calls = []
+        seen_call_ids = {
+            call.id
+            for message in request.messages
+            for call in (message.tool_calls or [])
+            if call.id.strip()
+        }
         for part in (choice.content.parts if choice.content else []):
             if part.text:
                 content = (content or "") + part.text
             elif getattr(part, "function_call", None):
+                provider_metadata = None
+                thought_signature = getattr(part, "thought_signature", None)
+                if thought_signature is not None:
+                    provider_metadata = {
+                        "google": {
+                            "thought_signature": {
+                                "encoding": "base64",
+                                "data": base64.b64encode(thought_signature).decode("ascii"),
+                            }
+                        }
+                    }
                 tool_calls.append(
                     LLMToolCall(
-                        id=f"call_{part.function_call.name}",
+                        id=unique_tool_call_id(
+                            getattr(part.function_call, "id", None), seen_call_ids
+                        ),
                         name=part.function_call.name,
-                        arguments=dict(part.function_call.args) if part.function_call.args else {}
+                        arguments=dict(part.function_call.args) if part.function_call.args else {},
+                        provider_metadata=provider_metadata,
                     )
                 )
         
@@ -144,3 +179,21 @@ def _google_tools(tools: list[dict] | None) -> list[dict] | None:
             "parameters_json_schema": function.get("parameters", {"type": "object"}),
         })
     return [{"function_declarations": declarations}]
+
+
+def _google_thought_signature(provider_metadata: dict[str, Any] | None) -> bytes | None:
+    if not provider_metadata:
+        return None
+    google_metadata = provider_metadata.get("google")
+    if not isinstance(google_metadata, dict):
+        return None
+    signature = google_metadata.get("thought_signature")
+    if not isinstance(signature, dict) or signature.get("encoding") != "base64":
+        return None
+    encoded = signature.get("data")
+    if not isinstance(encoded, str):
+        return None
+    try:
+        return base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return None

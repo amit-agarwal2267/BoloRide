@@ -7,11 +7,13 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -54,6 +56,14 @@ class Ride(Base):
             "status <> 'cancelled' OR "
             "(final_customer_cost IS NOT NULL AND final_customer_cost = 0)",
             name="ck_rides_cancelled_zero_cost",
+        ),
+        Index(
+            "uq_rides_one_active_per_customer",
+            "user_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('booked', 'assigned', 'on_trip')"
+            ),
         ),
     )
 

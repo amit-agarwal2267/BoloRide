@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
+from uuid import uuid4
 
 ProviderName = Literal["google", "groq"]
 MessageRole = Literal["user", "assistant", "tool"]
@@ -10,6 +11,16 @@ class LLMToolCall:
     id: str
     name: str
     arguments: dict
+    provider_metadata: dict[str, Any] | None = None
+
+
+def unique_tool_call_id(candidate: object, seen: set[str]) -> str:
+    """Preserve a usable provider ID, otherwise create one per invocation."""
+    call_id = candidate.strip() if isinstance(candidate, str) else ""
+    if not call_id or call_id in seen:
+        call_id = f"call_{uuid4().hex}"
+    seen.add(call_id)
+    return call_id
 
 
 @dataclass(frozen=True, slots=True)

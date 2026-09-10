@@ -9,7 +9,8 @@ from boloride.domain.exceptions import (
     LocationNotFoundError,
 )
 from boloride.domain.models.location import LocationCandidate, LocationSearchContext
-from boloride.integrations.maps.google_maps import GoogleMapsProvider
+from boloride.domain.models.location import LocationResolutionStatus
+from boloride.integrations.maps.google_maps import GoogleMapsProvider, contextual_query
 from boloride.integrations.maps.router import MapsRouter
 from boloride.services.location_service import LocationService
 from boloride.tools.location import search_locations
@@ -87,6 +88,13 @@ def google_payload() -> dict[str, object]:
             }
         ],
     }
+
+
+def test_customer_city_is_enriched_without_inventing_state() -> None:
+    context = LocationSearchContext(country="IN", city="Indore")
+
+    assert contextual_query("Sarafa Bazaar", context) == "Sarafa Bazaar, Indore, in"
+    assert context.state is None
 
 
 @pytest.mark.asyncio
@@ -192,6 +200,56 @@ async def test_location_service_raises_for_no_results() -> None:
 
     with pytest.raises(LocationNotFoundError):
         await LocationService(Router()).search_locations("unknown place")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_resolve_query_collapses_strong_duplicate_candidates() -> None:
+    duplicate_one = LocationCandidate(
+        "Kota Junction",
+        "Kota Junction, Railway Colony, Kota",
+        Decimal("25.223000"),
+        Decimal("75.880000"),
+        "google",
+        "same-place",
+        city="Kota",
+        state="Rajasthan",
+        country="India",
+    )
+    duplicate_two = LocationCandidate(
+        "Kota Jn",
+        "Kota Junction Railway Station, Kota",
+        Decimal("25.224000"),
+        Decimal("75.881000"),
+        "google",
+        "same-place",
+        city="Kota",
+        state="Rajasthan",
+        country="India",
+    )
+
+    class Router:
+        async def search_location(self, query, context):
+            return [duplicate_one, duplicate_two], "google", True, False
+
+        def get_search_providers(self):
+            return [self.get_provider()]
+
+        def get_provider(self):
+            class Provider:
+                provider_name = "google"
+
+                async def enrich_candidate(self, candidate):
+                    return candidate
+
+            return Provider()
+
+    result = await LocationService(Router()).resolve_query(  # type: ignore[arg-type]
+        "Kota Junction", city="Kota", state="Rajasthan"
+    )
+
+    assert result.status is LocationResolutionStatus.RESOLVED
+    assert result.location is not None
+    assert result.location.provider_place_id == "same-place"
 
 
 @pytest.mark.asyncio

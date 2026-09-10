@@ -1,8 +1,16 @@
 import logging
 from time import monotonic
 
-from boloride.domain.exceptions import DomainValidationError, LocationNotFoundError
+from boloride.domain.exceptions import (
+	DomainValidationError,
+	LocationNotFoundError,
+	RouteProviderError,
+	RouteSanityError,
+)
 from boloride.domain.models.location import (
+	assess_route_sanity,
+	customer_location_label,
+	deduplicate_location_candidates,
 	LocationClarificationReason,
 	LocationCandidate,
 	LocationResolutionResult,
@@ -43,19 +51,29 @@ class LocationService:
 		country: str | None = None,
 		language: str | None = None,
 		dense_context: bool = True,
-		require_city_context: bool = False,
 		session_id: str | None = None,
+		location_role: str | None = None,
+		context_source: str | None = None,
+		explicit_geography_present: bool = False,
+		context_conflict_detected: bool = False,
 	) -> LocationResolutionResult:
 		normalized_query = " ".join(query.split())
 		if not normalized_query:
 			raise DomainValidationError("location query cannot be blank")
+		logger.info(
+			"location_context_derived",
+			extra={
+				"event": "location_context_derived",
+				"session_id": session_id,
+				"location_role": location_role,
+				"explicit_geography_present": explicit_geography_present,
+				"context_source": context_source,
+				"context_city": city,
+				"context_state": state,
+				"context_conflict_detected": context_conflict_detected,
+			},
+		)
 		logger.info("location_resolution_requested", extra={"event": "location_resolution_requested", "session_id": session_id})
-		if require_city_context and city is None and _looks_like_incomplete_address(normalized_query):
-			logger.info("location_clarification_required", extra={"event": "location_clarification_required", "session_id": session_id, "reason": "missing_city"})
-			return LocationResolutionResult(
-				LocationResolutionStatus.CLARIFICATION_REQUIRED,
-				clarification_reason=LocationClarificationReason.MISSING_CITY,
-			)
 		context = LocationSearchContext(
 			country=country or self._default_country,
 			city=city,
@@ -63,12 +81,49 @@ class LocationService:
 			language=language or self._default_language,
 			radius_meters=self._urban_radius_meters if dense_context else self._rural_radius_meters,
 		)
+		if city is None and state is None:
+			logger.info(
+				"location_unbiased_search_started",
+				extra={
+					"event": "location_unbiased_search_started",
+					"session_id": session_id,
+					"location_role": location_role,
+				},
+			)
 		started_at = monotonic()
 		candidates, provider, fallback_used, unavailable = await self._router.search_location(normalized_query, context)
-		candidates = candidates[:3]
+		original_count = len(candidates)
+		candidates = deduplicate_location_candidates(candidates)[:3]
+		if len(candidates) < original_count:
+			logger.info(
+				"location_candidates_deduplicated",
+				extra={
+					"event": "location_candidates_deduplicated",
+					"session_id": session_id,
+					"provider": provider,
+					"removed_count": original_count - len(candidates),
+				},
+			)
 		status = LocationResolutionStatus.PROVIDER_UNAVAILABLE if unavailable else LocationResolutionStatus.NOT_FOUND
 		if candidates:
-			if len(candidates) == 1:
+			if city is None and state is None:
+				status = LocationResolutionStatus.LIKELY_MATCH_CONFIRMATION_REQUIRED
+				result = LocationResolutionResult(
+					status,
+					candidates=(candidates[0],),
+					provider=provider,
+					fallback_used=fallback_used,
+				)
+				logger.info(
+					"location_likely_candidate_proposed",
+					extra={
+						"event": "location_likely_candidate_proposed",
+						"session_id": session_id,
+						"location_role": location_role,
+						"provider": provider,
+					},
+				)
+			elif len(candidates) == 1:
 				resolved = await self.resolve_candidate(candidates[0])
 				status = LocationResolutionStatus.RESOLVED
 				result = LocationResolutionResult(status, location=resolved, provider=provider, fallback_used=fallback_used)
@@ -79,9 +134,21 @@ class LocationService:
 				result = LocationResolutionResult(status, candidates=tuple(candidates), clarification_reason=reason, provider=provider, fallback_used=fallback_used)
 		else:
 			result = LocationResolutionResult(status, provider=provider, fallback_used=fallback_used)
+		if fallback_used:
+			logger.info(
+				"location_provider_fallback_context_preserved",
+				extra={
+					"event": "location_provider_fallback_context_preserved",
+					"session_id": session_id,
+					"location_role": location_role,
+					"context_source": context_source,
+					"provider": provider,
+				},
+			)
 		logger.info("location_resolution_completed", extra={"event": "location_resolution_completed", "session_id": session_id, "result": status.value, "provider": provider, "fallback_used": fallback_used, "candidate_count_bucket": str(min(len(candidates), 3)), "duration_ms": round((monotonic()-started_at)*1000, 2)})
 		event = {
 			LocationResolutionStatus.RESOLVED: "location_resolved",
+			LocationResolutionStatus.LIKELY_MATCH_CONFIRMATION_REQUIRED: "location_candidate_confirmation_required",
 			LocationResolutionStatus.CLARIFICATION_REQUIRED: "location_clarification_required",
 			LocationResolutionStatus.NOT_FOUND: "location_not_found",
 			LocationResolutionStatus.PROVIDER_UNAVAILABLE: "location_provider_unavailable",
@@ -153,9 +220,55 @@ class LocationService:
 		return enriched.to_resolved_location()
 
 	async def get_route(
-		self, origin: ResolvedLocation, destination: ResolvedLocation
+		self,
+		origin: ResolvedLocation,
+		destination: ResolvedLocation,
+		*,
+		session_id: str | None = None,
 	):
-		return await self._router.get_route(origin, destination)
+		provider_failures = 0
+		sanity_failures: list[str] = []
+		for index, provider in enumerate(self._router.get_route_providers()):
+			try:
+				route = await provider.get_route(origin, destination)
+			except RouteProviderError:
+				provider_failures += 1
+				continue
+			sanity = assess_route_sanity(origin, destination, route)
+			fields = {
+				"session_id": session_id,
+				"provider": route.provider,
+				"fallback_used": index > 0,
+				"route_distance_km": round(route.distance_meters / 1000, 2),
+				"route_duration_seconds": route.duration_seconds,
+				"pickup_city": origin.city,
+				"pickup_state": origin.state,
+				"destination_city": destination.city,
+				"destination_state": destination.state,
+				"route_sanity_reason": sanity.reason,
+			}
+			if sanity.status.value == "passed":
+				logger.info(
+					"route_sanity_passed",
+					extra={"event": "route_sanity_passed", **fields},
+				)
+				return route
+			sanity_failures.append(sanity.reason)
+			logger.warning(
+				"route_sanity_failed",
+				extra={"event": "route_sanity_failed", **fields},
+			)
+		if sanity_failures:
+			raise RouteSanityError(
+				"route and endpoint geography are inconsistent; location clarification is required"
+			)
+		raise RouteProviderError(
+			f"route resolution failed across {provider_failures} configured providers"
+		)
+
+	@staticmethod
+	def customer_candidate_label(candidate: LocationCandidate) -> str:
+		return customer_location_label(candidate)
 
 	def resolve(self, location: LocationSchema) -> ResolvedLocation:
 		if location.provider_place_id and not location.provider:
@@ -170,9 +283,3 @@ class LocationService:
 			provider=location.provider,
 			provider_place_id=location.provider_place_id,
 		)
-
-
-def _looks_like_incomplete_address(query: str) -> bool:
-	"""Conservatively identify street/house input lacking geographic context."""
-	parts = [part.strip() for part in query.split(",") if part.strip()]
-	return len(parts) >= 2 and any(character.isdigit() for character in parts[0])

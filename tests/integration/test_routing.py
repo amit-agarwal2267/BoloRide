@@ -4,11 +4,12 @@ import httpx
 import pytest
 
 from boloride.config import Settings
-from boloride.domain.exceptions import RouteProviderError
+from boloride.domain.exceptions import RouteProviderError, RouteSanityError
 from boloride.domain.models.location import ResolvedLocation, RouteResult, TollStatus
 from boloride.integrations.maps.google_maps import GoogleMapsProvider
 from boloride.integrations.maps.ola_maps import OlaMapsProvider
 from boloride.integrations.maps.router import MapsRouter
+from boloride.services.location_service import LocationService
 
 
 def settings(**overrides: object) -> Settings:
@@ -132,3 +133,40 @@ async def test_route_http_failure_is_normalized(httpx_mock) -> None:
     with pytest.raises(RouteProviderError, match="timed out"):
         await provider.get_route(*locations())
     await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_location_service_retries_after_suspicious_route_and_uses_sane_fallback() -> None:
+    origin = ResolvedLocation(
+        "One", Decimal("25.20"), Decimal("75.80"), city="Kota", state="Rajasthan"
+    )
+    destination = ResolvedLocation(
+        "Two", Decimal("25.21"), Decimal("75.81"), city="Kota", state="Rajasthan"
+    )
+    suspicious = StubRouteProvider("ola", RouteResult(100_000, 5_000, "ola"))
+    sane = StubRouteProvider("google", RouteResult(2_000, 600, "google"))
+    router = MapsRouter(settings())
+    router._route_providers = [suspicious, sane]  # type: ignore[assignment]
+
+    result = await LocationService(router).get_route(origin, destination)
+
+    assert result.provider == "google"
+    assert suspicious.calls == sane.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_all_structurally_suspicious_routes_block_quote_path() -> None:
+    origin = ResolvedLocation(
+        "One", Decimal("25.20"), Decimal("75.80"), city="Kota", state="Rajasthan"
+    )
+    destination = ResolvedLocation(
+        "Two", Decimal("25.21"), Decimal("75.81"), city="Kota", state="Rajasthan"
+    )
+    router = MapsRouter(settings())
+    router._route_providers = [  # type: ignore[assignment]
+        StubRouteProvider("ola", RouteResult(100_000, 5_000, "ola")),
+        StubRouteProvider("google", RouteResult(120_000, 6_000, "google")),
+    ]
+
+    with pytest.raises(RouteSanityError, match="clarification"):
+        await LocationService(router).get_route(origin, destination)

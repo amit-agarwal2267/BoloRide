@@ -24,3 +24,7 @@ class LocationConfigurationError(LocationProviderError):
 
 class RouteProviderError(DomainValidationError):
     """Configured routing providers failed to return authoritative route facts."""
+
+
+class RouteSanityError(DomainValidationError):
+    """Provider route facts contradict trusted endpoint geography."""

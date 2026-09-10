@@ -1,10 +1,15 @@
+import logging
+
 from boloride.domain.models.user import (
+    customer_name_match_strategy,
     normalize_customer_age,
     normalize_customer_name,
     normalize_indian_phone_number,
 )
 from boloride.domain.policies import CustomerIdentityResult, CustomerIdentityState
 from boloride.repositories.user_repository import UserRepository
+
+logger = logging.getLogger(__name__)
 
 
 class UserService:
@@ -38,7 +43,18 @@ class UserService:
             )
         if provided_name is None or not provided_name.strip():
             return CustomerIdentityResult(CustomerIdentityState.NAME_MISMATCH)
-        if normalize_customer_name(provided_name) != customer.normalized_name:
+        match_strategy = customer_name_match_strategy(
+            customer.normalized_name, provided_name
+        )
+        logger.info(
+            "customer_name_match_evaluated",
+            extra={
+                "event": "customer_name_match_evaluated",
+                "match_strategy": match_strategy,
+                "matched": match_strategy != "none",
+            },
+        )
+        if match_strategy == "none":
             return CustomerIdentityResult(CustomerIdentityState.NAME_MISMATCH)
         return CustomerIdentityResult(
             CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,
@@ -58,7 +74,7 @@ class UserService:
         creation = await self._users.create_or_get(detected_phone, name, age)
 
         if not creation.created:
-            if creation.user.normalized_name != normalize_customer_name(name):
+            if customer_name_match_strategy(creation.user.normalized_name, name) == "none":
                 return CustomerIdentityResult(CustomerIdentityState.NAME_MISMATCH)
             return CustomerIdentityResult(
                 CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,

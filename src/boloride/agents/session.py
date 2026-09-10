@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any
 
 from livekit.agents import APIConnectOptions, llm
@@ -7,6 +8,8 @@ from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
 
 from boloride.llm.models import LLMMessage, LLMRequest, LLMToolCall
 from boloride.llm.router import LLMRouter
+
+logger = logging.getLogger(__name__)
 
 
 class BoloRideLiveKitLLM(llm.LLM):
@@ -34,7 +37,17 @@ class BoloRideLLMStream(llm.LLMStream):
     async def _run(self) -> None:
         request = _to_boloride_request(self._chat_ctx, self._tools, self._session_id)
         response = await self._router.generate(request)
-        tool_calls = [llm.FunctionToolCall(name=call.name, arguments=json.dumps(call.arguments), call_id=call.id) for call in response.tool_calls or []]
+        tool_calls = [llm.FunctionToolCall(name=call.name, arguments=json.dumps(call.arguments), call_id=call.id, extra=call.provider_metadata) for call in response.tool_calls or []]
+        for call in tool_calls:
+            logger.info(
+                "llm_tool_invocation_created",
+                extra={
+                    "event": "llm_tool_invocation_created",
+                    "session_id": self._session_id,
+                    "tool_name": call.name,
+                    "tool_call_id": call.call_id,
+                },
+            )
         self._event_ch.send_nowait(llm.ChatChunk(id=f"{response.provider}:{response.model}", delta=llm.ChoiceDelta(role="assistant", content=response.content, tool_calls=tool_calls)))
         if response.usage.total_tokens is not None:
             self._event_ch.send_nowait(llm.ChatChunk(id=f"{response.provider}:{response.model}:usage", usage=llm.CompletionUsage(prompt_tokens=response.usage.input_tokens or 0, completion_tokens=response.usage.output_tokens or 0, total_tokens=response.usage.total_tokens)))
@@ -57,7 +70,14 @@ def _to_boloride_request(chat_ctx: llm.ChatContext, tools: list[llm.Tool], sessi
                 arguments = json.loads(item.arguments)
             except (TypeError, json.JSONDecodeError):
                 arguments = {}
-            pending_calls.append(LLMToolCall(item.call_id, item.name, arguments))
+            pending_calls.append(
+                LLMToolCall(
+                    item.call_id,
+                    item.name,
+                    arguments,
+                    provider_metadata=item.extra or None,
+                )
+            )
             messages.append(LLMMessage(role="assistant", tool_calls=[pending_calls[-1]]))
         elif isinstance(item, llm.FunctionCallOutput):
             messages.append(LLMMessage(role="tool", content=item.output, tool_call_id=item.call_id, tool_name=item.name))

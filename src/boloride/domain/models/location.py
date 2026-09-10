@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
+from math import asin, cos, radians, sin, sqrt
+import re
 
 from boloride.domain.exceptions import DomainValidationError
 
@@ -21,15 +23,28 @@ class TollStatus(StrEnum):
 
 class LocationResolutionStatus(StrEnum):
     RESOLVED = "resolved"
+    LIKELY_MATCH_CONFIRMATION_REQUIRED = "likely_match_confirmation_required"
     CLARIFICATION_REQUIRED = "clarification_required"
     NOT_FOUND = "not_found"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
 
 
 class LocationClarificationReason(StrEnum):
-    MISSING_CITY = "missing_city"
     AMBIGUOUS_CANDIDATES = "ambiguous_candidates"
     AMBIGUOUS_STATE = "ambiguous_state"
+
+
+class LocationContextSource(StrEnum):
+    EXPLICIT_CURRENT_INPUT = "explicit_current_input"
+    CONFIRMED_ENDPOINT = "confirmed_endpoint"
+    EXPLICIT_CONVERSATION = "explicit_conversation"
+    OPPOSITE_ENDPOINT = "opposite_endpoint"
+    UNAVAILABLE = "unavailable"
+
+
+class RouteSanityStatus(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
 
 
 _AIRPORT_PLACE_TYPES = frozenset({"airport", "international_airport"})
@@ -90,6 +105,13 @@ class RouteResult:
             object.__setattr__(self, "toll_currency", currency)
         elif self.toll_currency is not None:
             raise DomainValidationError("toll currency requires an estimate")
+
+
+@dataclass(frozen=True, slots=True)
+class RouteSanityResult:
+    status: RouteSanityStatus
+    reason: str
+    direct_distance_meters: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,5 +253,141 @@ class LocationResolutionResult:
     def __post_init__(self) -> None:
         if self.status is LocationResolutionStatus.RESOLVED and self.location is None:
             raise DomainValidationError("resolved result requires a location")
+        if self.status is LocationResolutionStatus.LIKELY_MATCH_CONFIRMATION_REQUIRED:
+            if self.location is not None or len(self.candidates) != 1:
+                raise DomainValidationError(
+                    "likely-match result requires exactly one unconfirmed candidate"
+                )
         if len(self.candidates) > 3:
             raise DomainValidationError("at most three location candidates may be exposed")
+
+
+def deduplicate_location_candidates(
+    candidates: list[LocationCandidate],
+) -> list[LocationCandidate]:
+    """Collapse only provider-identical or geographically equivalent results."""
+    unique: list[LocationCandidate] = []
+    for candidate in candidates:
+        if not any(_same_practical_place(candidate, existing) for existing in unique):
+            unique.append(candidate)
+    return unique
+
+
+def customer_location_label(candidate: LocationCandidate) -> str:
+    """Build a concise distinction using provider-backed fields only."""
+    parts: list[str] = [candidate.display_name]
+    for value in (candidate.locality, candidate.city, candidate.state):
+        if value and _normalized_location_text(value) not in {
+            _normalized_location_text(part) for part in parts
+        }:
+            parts.append(value)
+    category = next(
+        (
+            kind.replace("_", " ")
+            for kind in (candidate.place_types or ())
+            if kind in {"train_station", "transit_station", "airport", "bus_station"}
+        ),
+        None,
+    )
+    if category and category not in candidate.display_name.casefold():
+        parts.insert(1, category)
+    return ", ".join(parts)
+
+
+def assess_route_sanity(
+    origin: ResolvedLocation,
+    destination: ResolvedLocation,
+    route: RouteResult,
+) -> RouteSanityResult:
+    """Reject structured geographic contradictions, never distance alone."""
+    direct = _direct_distance_meters(origin, destination)
+    if route.duration_seconds == 0 and route.distance_meters > 1000:
+        return RouteSanityResult(
+            RouteSanityStatus.FAILED, "invalid_duration", direct
+        )
+    if direct > 250 and route.distance_meters < direct * 0.85:
+        return RouteSanityResult(
+            RouteSanityStatus.FAILED, "route_shorter_than_geographic_separation", direct
+        )
+    same_locality = _same_known_geography(origin, destination)
+    if same_locality and direct > 500 and route.distance_meters > direct * 8:
+        return RouteSanityResult(
+            RouteSanityStatus.FAILED, "same_locality_route_detour", direct
+        )
+    return RouteSanityResult(RouteSanityStatus.PASSED, "consistent", direct)
+
+
+def _same_practical_place(
+    left: LocationCandidate, right: LocationCandidate
+) -> bool:
+    if (
+        left.provider == right.provider
+        and left.provider_place_id
+        and left.provider_place_id == right.provider_place_id
+    ):
+        return True
+    if _candidate_distance_meters(left, right) > 30:
+        return False
+    same_geography = all(
+        not left_value
+        or not right_value
+        or _normalized_location_text(left_value)
+        == _normalized_location_text(right_value)
+        for left_value, right_value in (
+            (left.city, right.city),
+            (left.state, right.state),
+            (left.country, right.country),
+        )
+    )
+    same_text = (
+        _normalized_location_text(left.display_name)
+        == _normalized_location_text(right.display_name)
+        or _normalized_location_text(left.formatted_address)
+        == _normalized_location_text(right.formatted_address)
+    )
+    return same_geography and same_text
+
+
+def _same_known_geography(
+    left: ResolvedLocation, right: ResolvedLocation
+) -> bool:
+    if not left.city or not right.city:
+        return False
+    return _normalized_location_text(left.city) == _normalized_location_text(
+        right.city
+    )
+
+
+def _candidate_distance_meters(
+    left: LocationCandidate, right: LocationCandidate
+) -> int:
+    return _spherical_distance_meters(
+        left.latitude, left.longitude, right.latitude, right.longitude
+    )
+
+
+def _direct_distance_meters(
+    left: ResolvedLocation, right: ResolvedLocation
+) -> int:
+    return _spherical_distance_meters(
+        left.latitude, left.longitude, right.latitude, right.longitude
+    )
+
+
+def _spherical_distance_meters(
+    latitude_one: Decimal,
+    longitude_one: Decimal,
+    latitude_two: Decimal,
+    longitude_two: Decimal,
+) -> int:
+    lat_one, lat_two = radians(float(latitude_one)), radians(float(latitude_two))
+    delta_latitude = lat_two - lat_one
+    delta_longitude = radians(float(longitude_two - longitude_one))
+    value = sin(delta_latitude / 2) ** 2 + (
+        cos(lat_one) * cos(lat_two) * sin(delta_longitude / 2) ** 2
+    )
+    return round(6_371_000 * 2 * asin(sqrt(min(1.0, value))))
+
+
+def _normalized_location_text(value: str) -> str:
+    return " ".join(re.findall(r"[\w]+", value.casefold()))

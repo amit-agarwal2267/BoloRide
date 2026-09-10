@@ -60,6 +60,13 @@ class PricingResult:
 
 
 @dataclass(frozen=True, slots=True)
+class VehiclePricePreview:
+    vehicle_type_code: str
+    estimated_total: Decimal
+    currency: str
+
+
+@dataclass(frozen=True, slots=True)
 class Quote:
     id: UUID
     session_id: str

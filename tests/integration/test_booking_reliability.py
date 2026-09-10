@@ -5,7 +5,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from boloride.agents.context import RideContext
@@ -364,3 +364,83 @@ async def test_concurrent_discounted_same_quote_reuses_its_reserved_slot(app):
         assert await verify.scalar(select(func.count()).select_from(OfferRedemption).where(OfferRedemption.ride_id == attempt.ride_id)) == 1
     assert provider.create_call_count == 1
     assert BookingResultStatus.DEFINITIVE_FAILURE not in {result.status for result in results}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "active_status", ["booked", "assigned", "on_trip"]
+)
+async def test_different_booking_is_blocked_by_existing_active_ride(
+    db_session: AsyncSession, active_status: str
+) -> None:
+    user = await customer(db_session)
+    provider = MockRideProvider()
+    booking = service(db_session, provider)
+    first = await booking.book_ride(user.id, make_context(user.id))
+    if active_status != "booked":
+        await db_session.execute(
+            update(Ride).where(Ride.id == first.ride.id).values(status=active_status)
+        )
+        await db_session.commit()
+
+    blocked = await booking.book_ride(user.id, make_context(user.id))
+
+    assert blocked.status is BookingResultStatus.ACTIVE_RIDE_EXISTS
+    assert blocked.active_ride is not None
+    assert blocked.active_ride.status == active_status
+    assert provider.create_call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["completed", "cancelled"])
+async def test_terminal_ride_allows_subsequent_booking(
+    db_session: AsyncSession, terminal_status: str
+) -> None:
+    user = await customer(db_session)
+    provider = MockRideProvider()
+    booking = service(db_session, provider)
+    first = await booking.book_ride(user.id, make_context(user.id))
+    values = {"status": terminal_status}
+    if terminal_status == "cancelled":
+        values["final_customer_cost"] = Decimal("0.00")
+    await db_session.execute(
+        update(Ride).where(Ride.id == first.ride.id).values(**values)
+    )
+    await db_session.commit()
+
+    second = await booking.book_ride(user.id, make_context(user.id))
+
+    assert second.status is BookingResultStatus.SUCCESS
+    assert provider.create_call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_different_quotes_create_only_one_provider_booking(app):
+    provider = MockRideProvider()
+    async with app.state.db_session_factory() as setup:
+        user = await customer(setup)
+        user_id = user.id
+        await setup.commit()
+    contexts = (make_context(user_id), make_context(user_id))
+
+    async def run(context):
+        async with app.state.db_session_factory() as session:
+            return await service(session, provider).book_ride(user_id, context)
+
+    results = await asyncio.gather(*(run(context) for context in contexts))
+
+    assert {result.status for result in results} == {
+        BookingResultStatus.SUCCESS,
+        BookingResultStatus.ACTIVE_RIDE_EXISTS,
+    }
+    assert provider.create_call_count == 1
+    async with app.state.db_session_factory() as verify:
+        active_count = await verify.scalar(
+            select(func.count())
+            .select_from(Ride)
+            .where(
+                Ride.user_id == user_id,
+                Ride.status.in_(("booked", "assigned", "on_trip")),
+            )
+        )
+        assert active_count == 1

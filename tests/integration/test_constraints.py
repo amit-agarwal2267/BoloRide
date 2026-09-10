@@ -105,3 +105,39 @@ async def test_invalid_ride_status_cannot_be_persisted(
             ),
             {"user_id": user.id},
         )
+
+
+@pytest.mark.asyncio
+async def test_database_prevents_two_active_rides_for_one_customer(
+    db_session: AsyncSession,
+) -> None:
+    user = await UserRepository(db_session).create(
+        "9876543226", "Single Active Rider", 30
+    )
+
+    def active_ride(provider_booking_id: str) -> Ride:
+        now = datetime.now(UTC)
+        return Ride(
+            user_id=user.id,
+            pickup_address="Home",
+            pickup_latitude=Decimal("25.18"),
+            pickup_longitude=Decimal("75.83"),
+            destination_address="Station",
+            destination_latitude=Decimal("25.22"),
+            destination_longitude=Decimal("75.88"),
+            requested_ride_at=now + timedelta(hours=1),
+            status=RideStatus.BOOKED,
+            confirmed_at=now,
+            provider="mock",
+            provider_booking_id=provider_booking_id,
+            booked_at=now,
+            fare_amount=Decimal("100.00"),
+            fare_currency="INR",
+        )
+
+    db_session.add(active_ride("single-active-one"))
+    await db_session.flush()
+    db_session.add(active_ride("single-active-two"))
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()

@@ -30,7 +30,7 @@ def agent_for(state, result, *, phone="9876543210"):
         locations=SimpleNamespace(), saved_places=SimpleNamespace(list_places=AsyncMock()),
         rides=SimpleNamespace(), ride_service=SimpleNamespace(), dispatch=SimpleNamespace(),
         booking=SimpleNamespace(), quotes=SimpleNamespace(), offers=SimpleNamespace(),
-        tracer=Tracer(), default_city=None, default_state=None, default_country="IN",
+        tracer=Tracer(), default_country="IN",
         timezone="Asia/Kolkata", time_resolution=TimeResolutionService(lambda: datetime.now(UTC)),
         user_service=users, detected_phone=phone,
     )
@@ -82,3 +82,24 @@ async def test_missing_phone_never_establishes_customer_or_unlocks_tools():
     assert "cannot continue" in (await agent.record_identity_details(name="Amit")).lower()
     assert "identification is required" in (await agent.create_fare_quote()).lower()
     users.onboard_customer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pickup_city_can_be_remembered_before_identity_without_unlocking_search():
+    agent, context, _, _ = agent_for(
+        CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED,
+        CustomerIdentityResult(CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED),
+    )
+
+    geography = await agent.establish_pickup_geography("Indore")
+    search = await agent.search_locations("Sarafa Bazaar", "pickup")
+
+    assert "pickup_geography_established" in geography
+    assert context.pickup_geography_city == "Indore"
+    assert "identification is required" in search.casefold()
+
+    context.establish_identity(
+        CustomerIdentityState.ONBOARDED_NEW_CUSTOMER, uuid4()
+    )
+    requirements = await agent.get_booking_requirements()
+    assert '"next_missing": "resolved_pickup"' in requirements

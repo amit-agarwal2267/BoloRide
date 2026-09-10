@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from boloride.agents.context import RideContext
 from boloride.db.models.booking_attempt import BookingAttempt
 from boloride.domain.exceptions import DomainValidationError
-from boloride.domain.models.booking import BookingAttemptState, BookingOutcome, BookingResultStatus
+from boloride.domain.models.booking import (
+    ActiveRideSummary,
+    BookingAttemptState,
+    BookingOutcome,
+    BookingResultStatus,
+)
+from boloride.domain.models.cancellation import RideStatusDetails
 from boloride.integrations.rideprovider.base import (
     ProviderCreateStatus,
     ProviderReconciliationStatus,
@@ -75,7 +81,10 @@ class BookingService:
                 request_id, context.pickup, context.destination, context.ride_time,
                 context.passenger_count, vehicle.code,
             )
-            attempt = await self._create_attempt(user_id, request, quote, offer)
+            created = await self._create_attempt(user_id, request, quote, offer)
+            if isinstance(created, BookingOutcome):
+                return created
+            attempt = created
             if attempt.quote_id != quote.id:
                 raise DomainValidationError("booking attempt quote binding is invalid")
         elif attempt.customer_id != user_id or attempt.request_fingerprint != quote.request_fingerprint:
@@ -83,7 +92,9 @@ class BookingService:
 
         return await self._continue_attempt(attempt, context)
 
-    async def _create_attempt(self, user_id, request, quote, offer) -> BookingAttempt:
+    async def _create_attempt(
+        self, user_id, request, quote, offer
+    ) -> BookingAttempt | BookingOutcome:
         attempt_id = request.request_id
         created = True
         values = {
@@ -100,6 +111,69 @@ class BookingService:
             "capacity_reserved": offer is not None,
             "reconciliation_count": 0,
         }
+        logger.info(
+            "active_ride_check_started",
+            extra={"event": "active_ride_check_started"},
+        )
+        await self._attempts.lock_customer(user_id)
+        existing = await self._attempts.get_by_quote(quote.id)
+        if existing is not None:
+            existing_id = existing.id
+            await self._session.rollback()
+            reloaded = await self._attempts.get(existing_id)
+            if reloaded is None:
+                raise DomainValidationError(
+                    "booking attempt disappeared while resolving a concurrent request"
+                )
+            return reloaded
+        active_ride = await self._rides.get_active_status_for_customer(user_id)
+        if active_ride is not None:
+            await self._session.rollback()
+            summary = _active_ride_summary(active_ride)
+            logger.info(
+                "active_ride_exists",
+                extra={
+                    "event": "active_ride_exists",
+                    "active_ride_status": summary.status,
+                },
+            )
+            return BookingOutcome(
+                BookingResultStatus.ACTIVE_RIDE_EXISTS, active_ride=summary
+            )
+        open_attempt = await self._attempts.get_open_for_customer(user_id)
+        if open_attempt is not None:
+            request_snapshot, quote_snapshot = deserialize_authorization(
+                open_attempt.authorized_quote_snapshot
+            )
+            open_attempt_reserves_offer_capacity = open_attempt.capacity_reserved
+            await self._session.rollback()
+            if open_attempt_reserves_offer_capacity and offer is not None:
+                raise DomainValidationError(
+                    "offer redemption capacity is reserved by a booking in progress"
+                )
+            summary = ActiveRideSummary(
+                status="booking_in_progress",
+                pickup=request_snapshot.pickup.display_name
+                or request_snapshot.pickup.address,
+                destination=request_snapshot.destination.display_name
+                or request_snapshot.destination.address,
+                requested_ride_at=request_snapshot.requested_ride_at,
+                vehicle_type_code=quote_snapshot.pricing.vehicle_type_code,
+            )
+            logger.info(
+                "active_ride_exists",
+                extra={
+                    "event": "active_ride_exists",
+                    "active_ride_status": summary.status,
+                },
+            )
+            return BookingOutcome(
+                BookingResultStatus.ACTIVE_RIDE_EXISTS, active_ride=summary
+            )
+        logger.info(
+            "active_ride_check_passed",
+            extra={"event": "active_ride_check_passed"},
+        )
         try:
             async with self._session.begin_nested():
                 if offer is not None and self._offers is not None:
@@ -303,3 +377,13 @@ class BookingService:
             raise DomainValidationError("location clarification is required")
         if context.selected_vehicle_type_code is None:
             raise DomainValidationError("vehicle type must be selected before booking")
+
+
+def _active_ride_summary(details: RideStatusDetails) -> ActiveRideSummary:
+    return ActiveRideSummary(
+        status=getattr(details.status, "value", details.status),
+        pickup=details.pickup,
+        destination=details.destination,
+        requested_ride_at=details.requested_ride_at,
+        vehicle_type_code=details.vehicle_type_code,
+    )

@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 
 from boloride.agents.context import RideContext
 from boloride.domain.exceptions import DomainValidationError
-from boloride.domain.models.quote import Quote, request_fingerprint
+from boloride.domain.models.quote import Quote, VehiclePricePreview, request_fingerprint
 from boloride.services.location_service import LocationService
 from boloride.services.pricing_service import PricingService
 
@@ -17,7 +17,10 @@ class QuoteService:
 
     async def create_quote(self, context: RideContext, *, now: datetime | None = None) -> Quote:
         pickup, destination, ride_at, vehicle = self._require_inputs(context)
-        route = await self._locations.get_route(pickup, destination)
+        route = context.route or await self._locations.get_route(
+            pickup, destination, session_id=context.session_id
+        )
+        context.set_route(route)
         pricing = await self._pricing.calculate(vehicle, pickup, destination, ride_at, route)
         quoted_at = now or datetime.now(UTC)
         if quoted_at.tzinfo is None:
@@ -29,6 +32,39 @@ class QuoteService:
         )
         context.set_quote(quote)
         return quote
+
+    async def preview_vehicle_prices(
+        self, context: RideContext, vehicle_type_codes: tuple[str, ...]
+    ) -> tuple[VehiclePricePreview, ...]:
+        if context.pickup is None or context.destination is None:
+            raise DomainValidationError(
+                "pickup and destination are required for vehicle price comparison"
+            )
+        if context.ride_time is None or context.ride_time.tzinfo is None:
+            raise DomainValidationError(
+                "a timezone-aware ride time is required for vehicle price comparison"
+            )
+        route = context.route or await self._locations.get_route(
+            context.pickup,
+            context.destination,
+            session_id=context.session_id,
+        )
+        context.set_route(route)
+        previews = []
+        for code in vehicle_type_codes:
+            pricing = await self._pricing.calculate(
+                code,
+                context.pickup,
+                context.destination,
+                context.ride_time,
+                route,
+            )
+            previews.append(
+                VehiclePricePreview(
+                    code, pricing.estimated_total, pricing.currency
+                )
+            )
+        return tuple(previews)
 
     async def require_bookable_quote(self, context: RideContext, *, now: datetime | None = None) -> Quote:
         quote = await self.require_current_quote(context, now=now)

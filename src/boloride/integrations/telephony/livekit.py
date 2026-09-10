@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -12,7 +13,7 @@ from boloride.agents.session import BoloRideLiveKitLLM
 from boloride.agents.voice_agent import BoloRideAgent
 from boloride.config import get_settings
 from boloride.domain.exceptions import DomainValidationError
-from boloride.domain.models.persona import AgentPersona, PersonaGender
+from boloride.domain.models.persona import AgentPersona
 from boloride.domain.policies import CustomerIdentityResult, CustomerIdentityState
 from boloride.db.session import create_database_engine, create_session_factory
 from boloride.integrations.langfuse.client import LangfuseClient
@@ -38,7 +39,7 @@ from boloride.services.pricing_service import PricingService
 from boloride.services.quote_service import QuoteService
 from boloride.services.ride_service import RideService
 from boloride.services.offer_service import OfferService
-from boloride.services.persona_service import PersonaSelector
+from boloride.services.persona_service import PersonaSelector, build_staff_personas
 from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.user_service import UserService
 from boloride.services.time_resolution_service import TimeResolutionService
@@ -64,6 +65,7 @@ server = AgentServer(
 @server.rtc_session(agent_name=settings.livekit_agent_name)
 async def entrypoint(ctx: JobContext) -> None:
     session_id = ctx.job.id
+    input_mode = _client_input_mode(ctx)
     ctx.log_context_fields = {"session_id": session_id}
     engine = create_database_engine(settings)
     database_session = create_session_factory(engine)()
@@ -74,14 +76,17 @@ async def entrypoint(ctx: JobContext) -> None:
     llm_router = create_llm_router(settings, tracer)
     maps_router = MapsRouter(settings)
     persona = PersonaSelector(
-        (
-            AgentPersona("formal-male", PersonaGender.MALE, settings.tts_male_voice),
-            AgentPersona("formal-female", PersonaGender.FEMALE, settings.tts_female_voice),
-        )
+        build_staff_personas(settings.tts_male_voice, settings.tts_female_voice)
     ).select()
     logger.info(
-        "persona_selected",
-        extra={"event": "persona_selected", "session_id": session_id, "persona_id": persona.persona_id, "gender": persona.gender.value},
+        "staff_persona_selected",
+        extra={
+            "event": "staff_persona_selected",
+            "session_id": session_id,
+            "persona_id": persona.persona_id,
+            "staff_name": persona.display_name,
+            "gender": persona.gender.value,
+        },
     )
 
     async def shutdown() -> None:
@@ -164,9 +169,8 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
         quotes=quotes,
         offers=offers,
+        vehicles=vehicles,
         tracer=tracer,
-        default_city=settings.default_city,
-        default_state=settings.default_state,
         default_country=settings.default_country,
         timezone=settings.default_timezone,
         time_resolution=TimeResolutionService(lambda: datetime.now(UTC), settings.default_timezone),
@@ -175,28 +179,40 @@ async def entrypoint(ctx: JobContext) -> None:
         persona=persona,
     )
     ctx.add_shutdown_callback(shutdown)
+    stt_obj = _session_stt(input_mode)
     session = AgentSession(
-        stt=STTRouter(settings).get_provider().get_livekit_stt(),
+        stt=stt_obj,
         llm=BoloRideLiveKitLLM(llm_router, session_id=session_id),
         tts=TTSRouter(settings, voice=persona.edge_tts_voice).get_provider().get_livekit_tts(),
         vad=silero.VAD.load(),
     )
-    room_options = room_io.RoomOptions(
-        audio_input=room_io.AudioInputOptions(
+    welcome_completed = asyncio.Event()
+    room_option_values = {
+        "audio_input": room_io.AudioInputOptions(
             noise_cancellation=dtln.noise_suppression(
                 debug_logging=settings.debug,
             ),
         )
-    )
+    }
+    if input_mode == "text":
+        room_option_values["text_input"] = room_io.TextInputOptions(
+            text_input_cb=_deferred_text_input_callback(
+                welcome_completed, session_id
+            )
+        )
+    room_options = room_io.RoomOptions(**room_option_values)
     session.input.set_audio_enabled(False)
     await session.start(agent=agent, room=ctx.room, room_options=room_options)
-    await play_deterministic_welcome(session, persona, session_id)
+    try:
+        await play_deterministic_welcome(session, persona, session_id)
+    finally:
+        welcome_completed.set()
     logger.info(
         "voice_session_started",
         extra={
             "event": "voice_session_started",
             "session_id": session_id,
-            "stt_provider": settings.stt_provider,
+            "stt_provider": settings.stt_provider if stt_obj is not None else "disabled",
             "maps_provider": settings.maps_provider,
             "tts_provider": settings.tts_provider,
             "prompt_source": prompt.source,
@@ -219,6 +235,59 @@ async def play_deterministic_welcome(
         session.input.set_audio_enabled(True)
     logger.info("deterministic_welcome_completed", extra={"event": "deterministic_welcome_completed", "session_id": session_id, "gender": persona.gender.value})
     return True
+
+
+def _deferred_text_input_callback(
+    welcome_completed: asyncio.Event, session_id: str
+):
+    """Build LiveKit's supported text callback, deferring turns during welcome."""
+
+    async def handle_text_input(session, event) -> None:
+        deferred = not welcome_completed.is_set()
+        if deferred:
+            logger.info(
+                "text_input_deferred_during_welcome",
+                extra={
+                    "event": "text_input_deferred_during_welcome",
+                    "session_id": session_id,
+                },
+            )
+        await welcome_completed.wait()
+        async with session._claim_user_turn():
+            if deferred:
+                logger.info(
+                    "text_input_processed_after_welcome",
+                    extra={
+                        "event": "text_input_processed_after_welcome",
+                        "session_id": session_id,
+                    },
+                )
+            await session.interrupt()
+            handle = session.generate_reply(user_input=event.text)
+            if deferred:
+                await handle.wait_for_playout()
+
+    return handle_text_input
+
+
+def _client_input_mode(ctx: JobContext) -> str:
+    """Disable STT only for an explicitly identified development text client."""
+    metadata = getattr(ctx.job, "metadata", None)
+    if isinstance(metadata, str) and metadata.strip():
+        try:
+            payload = json.loads(metadata)
+        except ValueError:
+            payload = {}
+        if isinstance(payload, dict) and payload.get("mode") == "text":
+            return "text"
+    return "microphone"
+
+
+def _session_stt(input_mode: str):
+    """Construct an STT adapter unless this is an explicit text-only session."""
+    if input_mode == "text":
+        return None
+    return STTRouter(settings).get_provider().get_livekit_stt()
 
 
 def _caller_phone(ctx: JobContext, development_phone: str | None) -> str | None:
