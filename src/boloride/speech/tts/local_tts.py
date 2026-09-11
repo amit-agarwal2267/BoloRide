@@ -1,5 +1,6 @@
 from io import BytesIO
 import logging
+from time import monotonic
 
 import av
 import edge_tts
@@ -7,6 +8,7 @@ from livekit.agents import APIConnectOptions, APIConnectionError, tts, utils
 
 from boloride.config import Settings
 from boloride.services.speech_normalizer import normalize_for_speech
+from boloride.observability.tracing import get_observability_context
 
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,17 @@ class EdgeChunkedStream(tts.ChunkedStream):
         self._voice = voice
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        observability = get_observability_context()
+        manager = (
+            observability.observe(
+                "voice.tts",
+                metadata={"provider": "edge", "voice_id": self._voice},
+            )
+            if observability is not None
+            else None
+        )
+        observation = manager.__enter__() if manager is not None else None
+        started_at = monotonic()
         try:
             audio = bytearray()
             async for chunk in edge_tts.Communicate(self.input_text, self._voice).stream():
@@ -58,9 +71,19 @@ class EdgeChunkedStream(tts.ChunkedStream):
                     for converted in resampler.resample(frame):
                         output_emitter.push(converted.to_ndarray().tobytes())
         except APIConnectionError:
+            if observation is not None:
+                observation.update(metadata={"provider": "edge", "voice_id": self._voice, "success": False, "duration_ms": (monotonic() - started_at) * 1000})
             raise
         except Exception as exc:
+            if observation is not None:
+                observation.update(metadata={"provider": "edge", "voice_id": self._voice, "success": False, "duration_ms": (monotonic() - started_at) * 1000})
             raise APIConnectionError("Edge TTS synthesis failed") from exc
+        else:
+            if observation is not None:
+                observation.update(metadata={"provider": "edge", "voice_id": self._voice, "success": True, "duration_ms": (monotonic() - started_at) * 1000})
+        finally:
+            if manager is not None:
+                manager.__exit__(None, None, None)
 
 
 class EdgeTTSProvider:

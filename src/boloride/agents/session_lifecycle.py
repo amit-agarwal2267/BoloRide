@@ -5,6 +5,7 @@ from typing import Any
 
 from boloride.agents.context import RideContext
 from boloride.domain.models.persona import AgentPersona, PersonaGender
+from boloride.observability.tracing import ObservabilityContext, SessionOutcome
 
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,13 @@ class SessionLifecycleController:
         persona: AgentPersona,
         *,
         timeout_seconds: float = CALLER_SILENCE_TIMEOUT_SECONDS,
+        observability: ObservabilityContext | None = None,
     ) -> None:
         self._session = session
         self._context = context
         self._persona = persona
         self._timeout_seconds = timeout_seconds
+        self._observability = observability
         self._silence_count = 0
         self._timer: asyncio.Task[None] | None = None
         self._started = False
@@ -63,6 +66,8 @@ class SessionLifecycleController:
             return
         self._silence_count = 0
         self._cancel()
+        if self._observability is not None:
+            self._observability.metrics.record_customer_turn()
         logger.info(
             "caller_silence_reset",
             extra={
@@ -97,6 +102,10 @@ class SessionLifecycleController:
             return
         self._silence_count += 1
         count = self._silence_count
+        if self._observability is not None:
+            self._observability.metrics.record_silence_recovery(
+                terminated=count >= 3
+            )
         logger.info(
             "silence_recovery",
             extra={
@@ -122,6 +131,8 @@ class SessionLifecycleController:
             await handle.wait_for_playout()
         if count >= 3:
             self._context.disconnect()
+            if self._observability is not None:
+                self._observability.set_outcome(SessionOutcome.ABANDONED)
             logger.info(
                 "session_ended_after_silence",
                 extra={

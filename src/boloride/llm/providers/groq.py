@@ -109,15 +109,25 @@ class GroqLLMProvider:
         if not content and not tool_calls:
             raise LLMProviderError("Groq returned empty content and no tool calls")
         usage = response.usage
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        input_tokens = getattr(usage, "prompt_tokens", None)
+        output_tokens = getattr(usage, "completion_tokens", None)
+        total_tokens = getattr(usage, "total_tokens", None)
         return LLMResponse(
             content=content,
             provider=self.name,
             model=model,
             latency_ms=(perf_counter() - started) * 1000,
             usage=TokenUsage(
-                input_tokens=getattr(usage, "prompt_tokens", None),
-                output_tokens=getattr(usage, "completion_tokens", None),
-                total_tokens=getattr(usage, "total_tokens", None),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                usage_source=(
+                    "provider"
+                    if any(value is not None for value in (input_tokens, output_tokens, total_tokens))
+                    else "unknown"
+                ),
+                cached_tokens=getattr(prompt_details, "cached_tokens", None),
             ),
             finish_reason=choice.finish_reason,
             tool_calls=tool_calls if tool_calls else None

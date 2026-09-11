@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from uuid import UUID, uuid4
 
 from boloride.agents.context import RideContext
@@ -6,6 +7,8 @@ from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.quote import Quote, VehiclePricePreview, request_fingerprint
 from boloride.services.location_service import LocationService
 from boloride.services.pricing_service import PricingService
+from boloride.observability.tracing import get_observability_context
+from boloride.observability.session_metrics import FunnelMilestone
 
 QUOTE_VALIDITY = timedelta(minutes=20)
 
@@ -17,7 +20,7 @@ class QuoteService:
 
     async def create_quote(self, context: RideContext, *, now: datetime | None = None) -> Quote:
         pickup, destination, ride_at, vehicle = self._require_inputs(context)
-        route = context.route or await self._locations.get_route(
+        route = context.route or await self._resolve_route(
             pickup, destination, session_id=context.session_id
         )
         context.set_route(route)
@@ -44,7 +47,7 @@ class QuoteService:
             raise DomainValidationError(
                 "a timezone-aware ride time is required for vehicle price comparison"
             )
-        route = context.route or await self._locations.get_route(
+        route = context.route or await self._resolve_route(
             context.pickup,
             context.destination,
             session_id=context.session_id,
@@ -65,6 +68,39 @@ class QuoteService:
                 )
             )
         return tuple(previews)
+
+    async def _resolve_route(self, pickup, destination, *, session_id: str):
+        observability = get_observability_context()
+        if observability is None:
+            return await self._locations.get_route(
+                pickup, destination, session_id=session_id
+            )
+        started_at = monotonic()
+        with observability.observe("tool.route", observation_type="tool") as observation:
+            try:
+                route = await self._locations.get_route(
+                    pickup, destination, session_id=session_id
+                )
+            except Exception:
+                observation.update(
+                    metadata={
+                        "success": False,
+                        "duration_ms": (monotonic() - started_at) * 1000,
+                    }
+                )
+                raise
+            observation.update(
+                metadata={
+                    "provider": route.provider,
+                    "fallback_used": self._locations.is_fallback_provider(route.provider),
+                    "route_duration_seconds": route.duration_seconds,
+                    "route_distance_meters": route.distance_meters,
+                    "success": True,
+                    "duration_ms": (monotonic() - started_at) * 1000,
+                }
+            )
+            observability.mark_milestone(FunnelMilestone.ROUTE_READY)
+            return route
 
     async def require_bookable_quote(self, context: RideContext, *, now: datetime | None = None) -> Quote:
         quote = await self.require_current_quote(context, now=now)

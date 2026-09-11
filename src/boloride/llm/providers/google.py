@@ -133,6 +133,9 @@ class GoogleLLMProvider:
         if not content and not tool_calls:
             raise LLMProviderError("Google returned empty content and no tool calls")
         usage = response.usage_metadata
+        input_tokens = getattr(usage, "prompt_token_count", None)
+        output_tokens = getattr(usage, "candidates_token_count", None)
+        total_tokens = getattr(usage, "total_token_count", None)
         finish_reason = getattr(choice.finish_reason, "value", choice.finish_reason)
         return LLMResponse(
             content=content,
@@ -140,9 +143,15 @@ class GoogleLLMProvider:
             model=model,
             latency_ms=(perf_counter() - started) * 1000,
             usage=TokenUsage(
-                input_tokens=getattr(usage, "prompt_token_count", None),
-                output_tokens=getattr(usage, "candidates_token_count", None),
-                total_tokens=getattr(usage, "total_token_count", None),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                usage_source=(
+                    "provider"
+                    if any(value is not None for value in (input_tokens, output_tokens, total_tokens))
+                    else "unknown"
+                ),
+                cached_tokens=getattr(usage, "cached_content_token_count", None),
             ),
             finish_reason=str(finish_reason) if finish_reason is not None else None,
             tool_calls=tool_calls or None,
