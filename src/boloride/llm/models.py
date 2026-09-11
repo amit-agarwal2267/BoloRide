@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -65,6 +66,30 @@ class TokenUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
+    usage_source: Literal["provider", "sdk", "calculated", "unknown"] = "unknown"
+    cached_tokens: int | None = None
+    input_cost: Decimal | None = None
+    output_cost: Decimal | None = None
+    total_cost: Decimal | None = None
+    currency: str | None = None
+    cost_source: Literal["provider_reported", "pricing_registry", "unknown"] = "unknown"
+
+    def __post_init__(self) -> None:
+        token_values = (
+            self.input_tokens,
+            self.output_tokens,
+            self.total_tokens,
+            self.cached_tokens,
+        )
+        if any(value is not None and value < 0 for value in token_values):
+            raise ValueError("token usage cannot be negative")
+        cost_values = (self.input_cost, self.output_cost, self.total_cost)
+        if any(value is not None and value < 0 for value in cost_values):
+            raise ValueError("LLM cost cannot be negative")
+        if self.cost_source == "provider_reported" and (
+            self.total_cost is None or not self.currency
+        ):
+            raise ValueError("provider-reported cost requires total cost and currency")
 
 
 @dataclass(frozen=True, slots=True)

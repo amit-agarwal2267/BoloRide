@@ -55,3 +55,45 @@ def test_tracing_setup_failure_does_not_break_wrapped_operation() -> None:
     )
     with tracer.observe("voice_session") as observation:
         observation.update(output="still running")
+
+
+def test_session_root_and_child_use_explicit_sdk_hierarchy() -> None:
+    child = Mock()
+    root = Mock()
+    root.start_observation.return_value = child
+    sdk = Mock()
+    sdk.create_trace_id.return_value = "a" * 32
+    sdk.start_observation.return_value = root
+    tracer = LangfuseTracer(
+        LangfuseClient(settings(enabled=True), sdk_client=sdk)
+    )
+
+    trace_id, observation = tracer.start_session_trace(
+        "boloride.voice_session",
+        correlation_id="session-123",
+        metadata={"interaction_mode": "text"},
+    )
+    with observation.observe(
+        "tool.location_search",
+        observation_type="tool",
+        metadata={"provider": "ola"},
+    ):
+        pass
+    observation.end()
+    observation.end()
+
+    assert trace_id == "a" * 32
+    sdk.create_trace_id.assert_called_once_with(seed="session-123")
+    sdk.start_observation.assert_called_once_with(
+        trace_context={"trace_id": "a" * 32},
+        name="boloride.voice_session",
+        as_type="agent",
+        metadata={"interaction_mode": "text"},
+    )
+    root.start_observation.assert_called_once_with(
+        name="tool.location_search",
+        as_type="tool",
+        metadata={"provider": "ola"},
+    )
+    child.end.assert_called_once_with()
+    root.end.assert_called_once_with()

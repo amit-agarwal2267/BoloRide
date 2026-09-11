@@ -23,7 +23,7 @@ class Observation:
     def __init__(self) -> None:
         self.updates: list[dict[str, object] | None] = []
 
-    def update(self, *, output: object = None, metadata: dict[str, object] | None = None) -> None:
+    def update(self, *, output: object = None, metadata: dict[str, object] | None = None, **kwargs: object) -> None:
         self.updates.append(metadata)
 
 
@@ -177,7 +177,7 @@ async def test_unexpected_error_is_traced_and_does_not_fallback() -> None:
 
     with pytest.raises(TypeError):
         await router.generate(request())
-    assert tracer.observations[0].updates[0]["error_type"] == "TypeError"
+    assert tracer.observations[0].updates[0]["failure_category"] == "unknown"
     groq.generate.assert_not_awaited()
 
 

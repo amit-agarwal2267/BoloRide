@@ -42,6 +42,9 @@ class LocationService:
 		self._urban_radius_meters = urban_radius_meters
 		self._rural_radius_meters = rural_radius_meters
 
+	def is_fallback_provider(self, provider_name: str) -> bool:
+		return self._router.is_fallback_provider(provider_name)
+
 	async def resolve_query(
 		self,
 		query: str,
@@ -229,11 +232,19 @@ class LocationService:
 		provider_failures = 0
 		sanity_failures: list[str] = []
 		for index, provider in enumerate(self._router.get_route_providers()):
-			try:
-				route = await provider.get_route(origin, destination)
-			except RouteProviderError:
-				provider_failures += 1
-				continue
+			if index == 1:
+				self._router.record_fallback_attempt()
+			with self._router.provider_observation(provider.provider_name, "route", index + 1) as observation:
+				started_at = monotonic()
+				try:
+					route = await provider.get_route(origin, destination)
+				except RouteProviderError:
+					provider_failures += 1
+					if observation is not None:
+						observation.update(metadata={"provider": provider.provider_name, "operation": "route", "attempt_order": index + 1, "success": False, "failure_category": "provider_unavailable", "duration_ms": (monotonic() - started_at) * 1000})
+					continue
+				if observation is not None:
+					observation.update(metadata={"provider": provider.provider_name, "operation": "route", "attempt_order": index + 1, "success": True, "duration_ms": (monotonic() - started_at) * 1000, "route_duration_seconds": route.duration_seconds, "route_distance_meters": route.distance_meters})
 			sanity = assess_route_sanity(origin, destination, route)
 			fields = {
 				"session_id": session_id,

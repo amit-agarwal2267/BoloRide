@@ -37,7 +37,8 @@ from boloride.domain.models.cancellation import (
     RideStatusDetails,
 )
 from boloride.domain.models.dispatch import DispatchResultStatus
-from boloride.integrations.langfuse.tracing import LangfuseTracer
+from boloride.observability.session_metrics import FunnelMilestone
+from boloride.observability.tracing import SessionOutcome, Tracer
 from boloride.repositories.ride_repository import RideRepository
 from boloride.services.booking_service import BookingService
 from boloride.services.guardrail_service import GuardrailService
@@ -75,7 +76,7 @@ class BoloRideAgent(Agent):
         quotes: QuoteService,
         offers: OfferService,
         vehicles: VehicleService | None = None,
-        tracer: LangfuseTracer,
+        tracer: Tracer,
         default_country: str,
         timezone: str,
         time_resolution: TimeResolutionService | None = None,
@@ -128,6 +129,9 @@ class BoloRideAgent(Agent):
             },
         )
         terminate = count >= 3
+        metrics = getattr(self._tracer, "metrics", None)
+        if metrics is not None:
+            metrics.record_guardrail(blocked=True, terminated=terminate)
         message = (
             "Main internal instructions ya security checks nahi badal sakti. "
             "Main ride booking, status ya cancellation mein madad kar sakti hoon."
@@ -142,6 +146,7 @@ class BoloRideAgent(Agent):
         await handle.wait_for_playout()
         if terminate:
             self.ride_context.disconnect()
+            self._set_session_outcome(SessionOutcome.GUARDRAIL_TERMINATED)
             logger.info(
                 "guardrail_session_terminated",
                 extra={
@@ -165,6 +170,9 @@ class BoloRideAgent(Agent):
             if self._persona is None:
                 return None
             acknowledgement_started = True
+            metrics = getattr(self._tracer, "metrics", None)
+            if metrics is not None:
+                metrics.record_slow_ack()
             logger.info(
                 "slow_operation_ack_started",
                 extra={
@@ -279,6 +287,7 @@ class BoloRideAgent(Agent):
                 logger.exception("customer_identity_failed", extra={"event": "customer_identity_failed", "session_id": self.ride_context.session_id})
                 return "Customer identification is temporarily unavailable. Please try again."
         self.ride_context.establish_identity(result.state, result.customer_id)
+        self._mark_milestone(FunnelMilestone.IDENTIFIED)
         self._user_id = result.customer_id
         completed_event = "customer_onboarding_completed" if result.state is CustomerIdentityState.ONBOARDED_NEW_CUSTOMER else "customer_verification_completed"
         logger.info(completed_event, extra={"event": completed_event, "session_id": self.ride_context.session_id})
@@ -287,6 +296,36 @@ class BoloRideAgent(Agent):
 
     def _trace_metadata(self, tool_name: str) -> dict[str, object]:
         return {"session_id": self.ride_context.session_id, "tool_name": tool_name}
+
+    def _set_session_outcome(self, outcome: SessionOutcome) -> None:
+        setter = getattr(self._tracer, "set_outcome", None)
+        if callable(setter):
+            setter(outcome)
+
+    def _mark_milestone(self, milestone: FunnelMilestone) -> None:
+        marker = getattr(self._tracer, "mark_milestone", None)
+        if callable(marker):
+            marker(milestone)
+
+    def _record_clarification(self, category: str, *, location: bool = False) -> None:
+        metrics = getattr(self._tracer, "metrics", None)
+        if metrics is not None:
+            metrics.record_clarification(category, location=location)
+
+    def _record_correction(self, category: str) -> None:
+        metrics = getattr(self._tracer, "metrics", None)
+        if metrics is not None:
+            metrics.record_correction(category)
+
+    def _record_tool_failure(self, category: str) -> None:
+        metrics = getattr(self._tracer, "metrics", None)
+        if metrics is not None:
+            metrics.record_tool_failure(category)
+
+    def _record_reconciliation(self, result: str) -> None:
+        metrics = getattr(self._tracer, "metrics", None)
+        if metrics is not None:
+            metrics.record_reconciliation(result)
 
     async def _database_call(self, operation: Callable[[], Awaitable[_T]]) -> _T:
         """Prevent concurrent use of this session while leaving non-DB tools parallel."""
@@ -434,6 +473,9 @@ class BoloRideAgent(Agent):
         ):
             self.ride_context.update_pickup(None)
         event = "pickup_geography_corrected" if changed else "pickup_geography_established"
+        self._mark_milestone(FunnelMilestone.GEOGRAPHY_ESTABLISHED)
+        if changed:
+            self._record_correction("pickup")
         logger.info(
             event,
             extra={
@@ -763,6 +805,7 @@ class BoloRideAgent(Agent):
             self._derive_location_context(role, explicit_city, explicit_state)
         )
         if context_city is None and context_state is None and not allow_unbiased_search:
+            self._record_clarification("geography", location=True)
             logger.info(
                 "pickup_geography_requested",
                 extra={
@@ -819,11 +862,11 @@ class BoloRideAgent(Agent):
         operation_version = self.ride_context.begin_location_operation(role)
         try:
             with self._tracer.observe(
-                "search_locations",
+                "tool.location_search",
                 observation_type="tool",
                 correlation_id=self.ride_context.session_id,
-                metadata=self._trace_metadata("search_locations"),
-            ):
+                metadata={**self._trace_metadata("search_locations"), "role": role},
+            ) as observation:
                 async with self._slow_operation(run_context, "location"):
                     result = await self._locations.resolve_query(
                         query,
@@ -836,7 +879,18 @@ class BoloRideAgent(Agent):
                         explicit_geography_present=bool(explicit_city or explicit_state),
                         context_conflict_detected=context_conflict,
                     )
+                observation.update(
+                    metadata={
+                        "role": role,
+                        "provider": getattr(result, "provider", None),
+                        "fallback_used": getattr(result, "fallback_used", False),
+                        "candidate_count": len(getattr(result, "candidates", ())),
+                        "success": result.status is not LocationResolutionStatus.PROVIDER_UNAVAILABLE,
+                        "result": result.status.value,
+                    }
+                )
         except LocationProviderError:
+            self._record_tool_failure("location")
             attempts = self.ride_context.record_location_clarification(role)
             return json.dumps(
                 {
@@ -868,6 +922,7 @@ class BoloRideAgent(Agent):
             is LocationResolutionStatus.LIKELY_MATCH_CONFIRMATION_REQUIRED
             and result.candidates
         ):
+            self._record_clarification("location", location=True)
             candidate = result.candidates[0]
             self.ride_context.set_likely_location_candidate(role, candidate)
             logger.info(
@@ -881,6 +936,7 @@ class BoloRideAgent(Agent):
             )
             return _likely_location_response(role, candidate)
         if result.status is LocationResolutionStatus.PROVIDER_UNAVAILABLE:
+            self._record_tool_failure("location")
             attempts = self.ride_context.record_location_clarification(role)
             return json.dumps(
                 {
@@ -889,6 +945,7 @@ class BoloRideAgent(Agent):
                 }
             )
         if result.status is LocationResolutionStatus.NOT_FOUND:
+            self._record_clarification("location", location=True)
             attempts = self.ride_context.record_location_clarification(role)
             return json.dumps(
                 {
@@ -902,9 +959,11 @@ class BoloRideAgent(Agent):
                 }
             )
         if not result.candidates:
+            self._record_clarification("location", location=True)
             return "Please ask which city this location is in."
         candidates = list(result.candidates)
         self.ride_context.set_location_candidates(candidates, role)
+        self._record_clarification("location", location=True)
         return "\n".join(
             f"{index}. {customer_location_label(candidate)}"
             for index, candidate in enumerate(candidates, start=1)
@@ -998,6 +1057,7 @@ class BoloRideAgent(Agent):
             time_phrase, previous=self.ride_context.ride_time, correction=correction
         )
         if result.status is TimeResolutionStatus.CLARIFICATION_REQUIRED:
+            self._record_clarification("timing")
             if result.timing_intent is RideTimingIntent.SCHEDULED:
                 self.ride_context.set_incomplete_timing_intent(
                     RideTimingIntent.SCHEDULED
@@ -1042,6 +1102,8 @@ class BoloRideAgent(Agent):
         corrected = correction or (
             previous_intent is not None and previous_intent is not result.timing_intent
         )
+        if corrected and changed:
+            self._record_correction("timing")
         self.ride_context.update_ride_timing(
             result.timing_intent, result.scheduled_at
         )
@@ -1119,6 +1181,12 @@ class BoloRideAgent(Agent):
             )
         )
         if pending is not None and pending.status in {
+            BookingResultStatus.SUCCESS,
+            BookingResultStatus.IDEMPOTENT_SUCCESS,
+        }:
+            self._mark_milestone(FunnelMilestone.BOOKED)
+            self._set_session_outcome(SessionOutcome.BOOKED)
+        if pending is not None and pending.status in {
             BookingResultStatus.OUTCOME_UNKNOWN,
             BookingResultStatus.IN_PROGRESS,
         }:
@@ -1127,11 +1195,12 @@ class BoloRideAgent(Agent):
             pending is not None
             and pending.status is BookingResultStatus.RECONCILIATION_PENDING
         ):
+            self._record_reconciliation("pending")
             return _booking_reconciliation_pending_message()
         if pending is not None and pending.status is BookingResultStatus.DEFINITIVE_FAILURE:
             return "Provider ne confirm kiya hai ki is request par ride book nahi hui."
         with self._tracer.observe(
-            "ride_status_lookup",
+            "tool.status",
             observation_type="tool",
             correlation_id=self.ride_context.session_id,
             metadata=self._trace_metadata("get_ride_status"),
@@ -1155,7 +1224,9 @@ class BoloRideAgent(Agent):
             )
         )
         if details is None:
+            self._record_tool_failure("status")
             return "No matching ride was found for this customer."
+        self._mark_milestone(FunnelMilestone.STATUS_CHECKED)
         final_cost = (
             f" Final customer cost: {details.currency} {details.final_customer_cost:.0f}."
             if details.final_customer_cost is not None
@@ -1377,6 +1448,16 @@ class BoloRideAgent(Agent):
                     else "selected ride"
                 )
                 outcomes.append(f"{summary}: {item.status.value}")
+            if any(
+                item.status
+                in {
+                    CancellationResultStatus.SUCCESS,
+                    CancellationResultStatus.IDEMPOTENT_SUCCESS,
+                }
+                for item in result.results
+            ):
+                self._set_session_outcome(SessionOutcome.CANCELLED)
+                self._mark_milestone(FunnelMilestone.CANCELLED)
             return json.dumps(
                 {"status": "cancellation_set_processed", "outcomes": outcomes}
             )
@@ -1384,7 +1465,7 @@ class BoloRideAgent(Agent):
         if ride_id is None:
             return "Select a customer-owned ride before cancellation."
         with self._tracer.observe(
-            "cancel_ride",
+            "tool.cancellation",
             observation_type="tool",
             correlation_id=self.ride_context.session_id,
             metadata=self._trace_metadata("cancel_selected_ride"),
@@ -1398,15 +1479,21 @@ class BoloRideAgent(Agent):
         if result.status is CancellationResultStatus.CONFIRMATION_REQUIRED:
             return "Explicit cancellation confirmation is required for this ride."
         if result.status is CancellationResultStatus.NOT_FOUND:
+            self._record_tool_failure("cancellation")
             return "No matching ride was found for this customer."
         if result.status is CancellationResultStatus.NOT_CANCELLABLE:
             state = result.ride.status.value if result.ride else "not cancellable"
             return f"The ride is currently {state} and cannot be cancelled."
         if result.status is CancellationResultStatus.RACE_LOST:
+            self._record_tool_failure("cancellation")
             state = result.ride.status.value if result.ride else "unavailable"
             return f"The ride is now {state}, so cancellation was not applied."
         if result.status is CancellationResultStatus.IDEMPOTENT_SUCCESS:
+            self._set_session_outcome(SessionOutcome.CANCELLED)
+            self._mark_milestone(FunnelMilestone.CANCELLED)
             return "Ride pehle hi cancel ho chuki hai. Final customer cost INR 0 hai. Aur kisi cheez mein madad chahiye?"
+        self._set_session_outcome(SessionOutcome.CANCELLED)
+        self._mark_milestone(FunnelMilestone.CANCELLED)
         return "Ride cancel ho gayi hai. Final customer cost INR 0 hai. Aur kisi cheez mein madad chahiye?"
 
     @function_tool
@@ -1422,6 +1509,7 @@ class BoloRideAgent(Agent):
         )
         await handle.wait_for_playout()
         self.ride_context.disconnect()
+        self._set_session_outcome(SessionOutcome.COMPLETED)
         logger.info(
             "session_completed",
             extra={
@@ -1447,6 +1535,7 @@ class BoloRideAgent(Agent):
             self._quotes.confirm_quote(
                 self.ride_context, self.ride_context.current_quote.id
             )
+            self._mark_milestone(FunnelMilestone.CONFIRMED)
             return "Explicit confirmation recorded. The booking may now be created."
         self.ride_context.confirmed_quote_id = None
         self.ride_context.user_confirmed = False
@@ -1573,6 +1662,7 @@ class BoloRideAgent(Agent):
         if self._vehicles is None:
             return json.dumps({"status": "vehicle_catalog_unavailable"})
         had_quote = self.ride_context.current_quote is not None
+        previous_passenger_count = self.ride_context.passenger_count
         previous_vehicle = self.ride_context.selected_vehicle_type_code
         try:
             await self._database_call(
@@ -1583,7 +1673,10 @@ class BoloRideAgent(Agent):
                 )
             )
         except DomainValidationError as exc:
+            self._record_clarification("passengers")
             return json.dumps({"status": "invalid_passenger_count", "message": str(exc)})
+        if previous_passenger_count != self.ride_context.passenger_count:
+            self._record_correction("passengers")
         logger.info(
             "passenger_count_established",
             extra={
@@ -1649,6 +1742,7 @@ class BoloRideAgent(Agent):
 
             await self._database_call(select)
         except DomainValidationError as exc:
+            self._record_clarification("vehicle")
             eligible = await self._database_call(
                 lambda: self._vehicles.get_eligible_vehicle_types(
                     self.ride_context.passenger_count
@@ -1688,6 +1782,8 @@ class BoloRideAgent(Agent):
                     "reason": "vehicle_changed",
                 },
             )
+        if previous_vehicle is not None and previous_vehicle != self.ride_context.selected_vehicle_type_code:
+            self._record_correction("vehicle")
         return json.dumps(
             {
                 "status": "vehicle_selected",
@@ -1804,11 +1900,30 @@ class BoloRideAgent(Agent):
                 )
         started = perf_counter()
         try:
-            async with self._slow_operation(run_context, "quote"):
-                quote = await self._database_call(
-                    lambda: self._quotes.create_quote(self.ride_context)
+            with self._tracer.observe(
+                "tool.quote",
+                observation_type="tool",
+                correlation_id=self.ride_context.session_id,
+                metadata={
+                    "vehicle_category": self.ride_context.selected_vehicle_type_code
+                },
+            ) as observation:
+                async with self._slow_operation(run_context, "quote"):
+                    quote = await self._database_call(
+                        lambda: self._quotes.create_quote(self.ride_context)
+                    )
+                observation.update(
+                    metadata={
+                        "vehicle_category": quote.pricing.vehicle_type_code,
+                        "provider": quote.pricing.route_provider,
+                        "success": True,
+                        "duration_ms": (perf_counter() - started) * 1000,
+                    }
                 )
+                self._mark_milestone(FunnelMilestone.QUOTED)
         except RouteSanityError:
+            self._record_tool_failure("route")
+            self._record_clarification("location", location=True)
             logger.info(
                 "quote_blocked_by_route_sanity",
                 extra={
@@ -1823,6 +1938,7 @@ class BoloRideAgent(Agent):
                 }
             )
         except DomainValidationError as exc:
+            self._record_tool_failure("quote")
             logger.info(
                 "quote_creation_failed",
                 extra={
@@ -1887,7 +2003,7 @@ class BoloRideAgent(Agent):
 
         try:
             with self._tracer.observe(
-                "create_booking",
+                "tool.booking",
                 observation_type="tool",
                 correlation_id=self.ride_context.session_id,
                 metadata=self._trace_metadata("create_booking"),
@@ -1900,12 +2016,16 @@ class BoloRideAgent(Agent):
                         in {BookingResultStatus.SUCCESS, BookingResultStatus.IDEMPOTENT_SUCCESS},
                         "booking_result": outcome.status.value,
                         "provider": getattr(outcome.provider_result, "provider", None),
+                        "reconciliation_pending": outcome.status
+                        is BookingResultStatus.RECONCILIATION_PENDING,
                     }
                 )
         except DomainValidationError as exc:
+            self._record_tool_failure("booking")
             self.ride_context.user_confirmed = False
             return f"Booking rejected: {exc}."
         except Exception as exc:
+            self._record_tool_failure("booking")
             self.ride_context.user_confirmed = False
             logger.warning(
                 "booking_provider_failed",
@@ -1920,8 +2040,10 @@ class BoloRideAgent(Agent):
             BookingResultStatus.OUTCOME_UNKNOWN,
             BookingResultStatus.IN_PROGRESS,
         }:
+            self._record_reconciliation("unresolved")
             return _booking_status_unknown_message()
         if outcome.status is BookingResultStatus.RECONCILIATION_PENDING:
+            self._record_reconciliation("pending")
             return _booking_reconciliation_pending_message()
         if outcome.status is BookingResultStatus.ACTIVE_RIDE_EXISTS:
             active = outcome.active_ride
@@ -1951,6 +2073,8 @@ class BoloRideAgent(Agent):
         result = outcome.provider_result
         if result is None or outcome.accepted_quote is None:
             return _booking_status_unknown_message()
+        self._set_session_outcome(SessionOutcome.BOOKED)
+        self._mark_milestone(FunnelMilestone.BOOKED)
         return (
             f"Ride book ho gayi hai. Driver {result.driver_name}; "
             f"vehicle {result.vehicle_description}; "
@@ -1971,6 +2095,7 @@ class BoloRideAgent(Agent):
         self.ride_context.clear_pending_location_candidate(role)
         self.ride_context.clear_location_candidates()
         if previous is not None and previous != location:
+            self._record_correction(role)
             logger.info("location_correction", extra={"event": "location_correction", "session_id": self.ride_context.session_id, "location_role": role})
             logger.info("downstream_quote_invalidated", extra={"event": "downstream_quote_invalidated", "session_id": self.ride_context.session_id, "reason": f"{role}_changed"})
         if previous != location and (had_route or had_quote):
@@ -1982,6 +2107,8 @@ class BoloRideAgent(Agent):
                     "reason": f"{role}_changed",
                 },
             )
+        if self.ride_context.pickup is not None and self.ride_context.destination is not None:
+            self._mark_milestone(FunnelMilestone.LOCATIONS_RESOLVED)
 
 
 def _is_destination_shorthand(query: str) -> bool:

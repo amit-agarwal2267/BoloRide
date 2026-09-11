@@ -30,6 +30,7 @@ from boloride.services.booking_snapshots import (
     serialize_authorization,
     serialize_provider_result,
 )
+from boloride.observability.tracing import get_observability_context
 from boloride.services.offer_service import OfferService
 from boloride.services.quote_service import QuoteService
 from boloride.services.vehicle_service import VehicleService
@@ -276,6 +277,9 @@ class BookingService:
     async def _reconcile(
         self, attempt, context, *, allow_provider_retry: bool = True
     ) -> BookingOutcome:
+        observability = get_observability_context()
+        if observability is not None:
+            observability.metrics.record_reconciliation("attempted")
         logger.info("booking_reconciliation_attempted", extra={"event": "booking_reconciliation_attempted", "attempt_id": str(attempt.id), "provider": attempt.provider})
         try:
             outcome = await self._provider.reconcile_booking(attempt.provider_idempotency_key)
@@ -283,6 +287,8 @@ class BookingService:
             await self._persist_unknown(attempt.id, type(exc).__name__, reconciled=True)
             return BookingOutcome(BookingResultStatus.OUTCOME_UNKNOWN)
         if outcome.status is ProviderReconciliationStatus.CONFIRMED and outcome.booking is not None:
+            if observability is not None:
+                observability.metrics.record_reconciliation("success")
             attempt_id, provider_name = attempt.id, attempt.provider
             try:
                 attempt = await self._persist_confirmation(attempt.id, outcome.booking, reconciled=True)
@@ -292,6 +298,8 @@ class BookingService:
                 return BookingOutcome(BookingResultStatus.RECONCILIATION_PENDING)
             return await self._finalize(attempt, context)
         if outcome.status is ProviderReconciliationStatus.UNKNOWN:
+            if observability is not None:
+                observability.metrics.record_reconciliation("unresolved")
             await self._persist_unknown(attempt.id, outcome.failure_category, reconciled=True)
             return BookingOutcome(BookingResultStatus.OUTCOME_UNKNOWN)
 

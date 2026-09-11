@@ -8,7 +8,6 @@ from livekit.plugins import silero
 from livekit.plugins import dtln
 
 from boloride.agents.context import RideContext
-from boloride.agents.lifecycle import voice_session_trace
 from boloride.agents.session import BoloRideLiveKitLLM
 from boloride.agents.session_lifecycle import SessionLifecycleController
 from boloride.agents.voice_agent import BoloRideAgent
@@ -23,6 +22,11 @@ from boloride.integrations.maps.router import MapsRouter
 from boloride.integrations.rideprovider.mock_provider import MockRideProvider
 from boloride.llm.router import create_llm_router
 from boloride.observability.logger import configure_logging
+from boloride.observability.tracing import (
+    ObservabilityContext,
+    SessionOutcome,
+    VoiceSessionMetadata,
+)
 from boloride.prompts.registry import PromptKey, PromptRegistry
 from boloride.repositories.booking_attempt_repository import BookingAttemptRepository
 from boloride.repositories.assignment_repository import AssignmentRepository
@@ -72,11 +76,7 @@ async def entrypoint(ctx: JobContext) -> None:
     database_session = create_session_factory(engine)()
     langfuse = LangfuseClient(settings)
     tracer = LangfuseTracer(langfuse)
-    trace_manager = voice_session_trace(tracer, session_id)
-    trace = trace_manager.__enter__()
     lifecycle: SessionLifecycleController | None = None
-    llm_router = create_llm_router(settings, tracer)
-    maps_router = MapsRouter(settings)
     persona = PersonaSelector(
         build_staff_personas(settings.tts_male_voice, settings.tts_female_voice)
     ).select()
@@ -91,12 +91,42 @@ async def entrypoint(ctx: JobContext) -> None:
         },
     )
 
+    prompt = PromptRegistry(
+        langfuse,
+        label=settings.langfuse_prompt_label,
+        fallback_enabled=settings.prompt_fallback_enabled,
+    ).get(PromptKey.VOICE_AGENT)
+    observability = ObservabilityContext.start_voice_session(
+        tracer,
+        session_id=session_id,
+        metadata=VoiceSessionMetadata(
+            persona_id=persona.persona_id,
+            persona_gender=persona.gender.value,
+            interaction_mode=input_mode,
+            stt_provider=settings.stt_provider,
+            maps_provider=settings.maps_provider,
+            tts_provider=settings.tts_provider,
+            prompt_source=prompt.source,
+            environment=settings.app_env,
+        ),
+    )
+    ctx.log_context_fields = {
+        "session_id": session_id,
+        "trace_id": observability.trace_id,
+    }
+    llm_router = create_llm_router(settings, observability)
+    maps_router = MapsRouter(settings, observability)
+
     async def shutdown() -> None:
         if lifecycle is not None:
             await lifecycle.aclose()
+        default_outcome = (
+            SessionOutcome.COMPLETED
+            if not ride_context.session_active
+            else SessionOutcome.ABANDONED
+        )
         quotes.disconnect(ride_context)
-        trace.update(metadata={"success": True})
-        trace_manager.__exit__(None, None, None)
+        observability.finalize(default_outcome)
         await maps_router.aclose()
         await llm_router.close()
         await database_session.close()
@@ -140,11 +170,6 @@ async def entrypoint(ctx: JobContext) -> None:
         offers,
     )
     ride_service = RideService(database_session, rides, offers, dispatch)
-    prompt = PromptRegistry(
-        langfuse,
-        label=settings.langfuse_prompt_label,
-        fallback_enabled=settings.prompt_fallback_enabled,
-    ).get(PromptKey.VOICE_AGENT)
     ride_context = RideContext(
         session_id=session_id,
         caller_id=None,
@@ -174,7 +199,7 @@ async def entrypoint(ctx: JobContext) -> None:
         quotes=quotes,
         offers=offers,
         vehicles=vehicles,
-        tracer=tracer,
+        tracer=observability,
         default_country=settings.default_country,
         timezone=settings.default_timezone,
         time_resolution=TimeResolutionService(lambda: datetime.now(UTC), settings.default_timezone),
@@ -207,12 +232,15 @@ async def entrypoint(ctx: JobContext) -> None:
         )
     room_options = room_io.RoomOptions(**room_option_values)
     session.input.set_audio_enabled(False)
-    await session.start(agent=agent, room=ctx.room, room_options=room_options)
-    try:
-        await play_deterministic_welcome(session, persona, session_id)
-    finally:
-        welcome_completed.set()
-    lifecycle = SessionLifecycleController(session, ride_context, persona)
+    with observability.activate():
+        await session.start(agent=agent, room=ctx.room, room_options=room_options)
+        try:
+            await play_deterministic_welcome(session, persona, session_id)
+        finally:
+            welcome_completed.set()
+    lifecycle = SessionLifecycleController(
+        session, ride_context, persona, observability=observability
+    )
     lifecycle.start()
     logger.info(
         "voice_session_started",

@@ -7,6 +7,7 @@ import pytest
 from boloride.agents.context import RideContext
 from boloride.agents.session_lifecycle import SessionLifecycleController
 from boloride.domain.models.persona import AgentPersona, PersonaGender
+from boloride.observability.session_metrics import SessionMetrics
 
 
 class FakeHandle:
@@ -84,4 +85,24 @@ async def test_agent_work_cancels_silence_timer_until_listening_again():
         SimpleNamespace(new_state="listening")
     )
     assert lifecycle._timer is not None
+    await lifecycle.aclose()
+
+
+@pytest.mark.asyncio
+async def test_only_accepted_customer_messages_count_as_turns():
+    lifecycle, session, context = controller()
+    observability = SimpleNamespace(metrics=SessionMetrics())
+    lifecycle = SessionLifecycleController(
+        session, context, lifecycle._persona, timeout_seconds=3600,
+        observability=observability,
+    )
+    lifecycle.start()
+
+    callback = session.listeners["conversation_item_added"]
+    callback(SimpleNamespace(item=SimpleNamespace(role="assistant", raw_text_content="welcome")))
+    callback(SimpleNamespace(item=SimpleNamespace(role="tool", raw_text_content="technical")))
+    callback(SimpleNamespace(item=SimpleNamespace(role="user", raw_text_content="  ")))
+    callback(SimpleNamespace(item=SimpleNamespace(role="user", raw_text_content="book ride")))
+
+    assert observability.metrics.customer_turn_count == 1
     await lifecycle.aclose()
