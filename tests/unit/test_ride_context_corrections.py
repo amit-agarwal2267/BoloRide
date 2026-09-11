@@ -4,6 +4,7 @@ import uuid
 from boloride.agents.context import RideContext
 from boloride.domain.models.location import ResolvedLocation, RouteResult
 from boloride.domain.models.vehicle import PassengerCountSource
+from boloride.domain.models.scheduling import RideTimingIntent
 
 def test_ride_context_corrections():
     context = RideContext(session_id="test", caller_id=uuid.uuid4())
@@ -78,3 +79,51 @@ def test_location_change_invalidates_cached_route_quote_and_confirmation():
     assert context.route is None
     assert context.current_quote is None
     assert context.user_confirmed is False
+
+
+def test_timing_correction_preserves_non_timing_state_and_invalidates_confirmation():
+    from datetime import UTC
+    from decimal import Decimal
+
+    location = ResolvedLocation("Place", Decimal("25"), Decimal("75"))
+    context = RideContext(
+        session_id="test",
+        caller_id=uuid.uuid4(),
+        pickup=location,
+        destination=ResolvedLocation("Other", Decimal("26"), Decimal("76")),
+        passenger_count=4,
+        selected_vehicle_type_code="sedan",
+        user_confirmed=True,
+    )
+
+    context.update_ride_timing(
+        RideTimingIntent.SCHEDULED,
+        datetime(2026, 9, 12, 1, 30, tzinfo=UTC),
+    )
+    context.user_confirmed = True
+    context.update_ride_timing(
+        RideTimingIntent.IMMEDIATE,
+        datetime(2026, 9, 11, 4, 0, tzinfo=UTC),
+    )
+
+    assert context.timing_intent is RideTimingIntent.IMMEDIATE
+    assert context.pickup is location
+    assert context.destination is not None
+    assert context.passenger_count == 4
+    assert context.selected_vehicle_type_code == "sedan"
+    assert context.user_confirmed is False
+
+
+def test_pickup_instruction_change_does_not_invalidate_route_or_confirmation():
+    from decimal import Decimal
+
+    context = RideContext(session_id="test", caller_id=uuid.uuid4())
+    context.pickup = ResolvedLocation("Place", Decimal("25"), Decimal("75"))
+    context.route = RouteResult(1000, 100, "ola")
+    context.user_confirmed = True
+
+    context.set_pickup_instructions("  SBI ATM ke saamne  ")
+
+    assert context.pickup_instructions == "SBI ATM ke saamne"
+    assert context.route is not None
+    assert context.user_confirmed is True

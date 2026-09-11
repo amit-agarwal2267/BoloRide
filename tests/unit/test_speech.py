@@ -63,3 +63,14 @@ def test_tts_router_exposes_livekit_compatible_edge_adapter() -> None:
 def test_tts_router_uses_session_persona_voice_override() -> None:
     adapter = TTSRouter(settings(), voice="hi-IN-MadhurNeural").get_provider().get_livekit_tts()
     assert adapter.model == "hi-IN-MadhurNeural"
+
+
+@pytest.mark.asyncio
+async def test_edge_tts_normalizes_only_the_synthesized_copy() -> None:
+    adapter = TTSRouter(settings()).get_provider().get_livekit_tts()
+    source = "Fare ₹245, vehicle RJ20AB1234"
+
+    stream = adapter.synthesize(source)
+
+    assert stream._input_text == "Fare 245 rupees, vehicle R J 20, A B, 1 2 3 4"
+    assert source == "Fare ₹245, vehicle RJ20AB1234"

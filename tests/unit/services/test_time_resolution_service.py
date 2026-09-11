@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from boloride.domain.models.scheduling import TimeResolutionStatus
+from boloride.domain.models.scheduling import RideTimingIntent, TimeResolutionStatus
 from boloride.services.time_resolution_service import TimeResolutionService
 
 
@@ -44,3 +44,40 @@ def test_naive_clock_is_rejected():
     service = TimeResolutionService(lambda: datetime(2026, 9, 9, 12))
     with pytest.raises(ValueError, match="timezone-aware"):
         service.resolve("tomorrow 6 AM")
+
+
+@pytest.mark.parametrize(
+    "phrase", ["abhi", "abhi chahiye", "now", "immediately", "ASAP"]
+)
+def test_clear_immediate_phrases_use_authoritative_clock(service, phrase):
+    result = service.resolve(phrase)
+    assert result.status is TimeResolutionStatus.RESOLVED
+    assert result.timing_intent is RideTimingIntent.IMMEDIATE
+    assert result.scheduled_at == NOW
+
+
+def test_relative_hour_is_scheduled_from_authoritative_clock(service):
+    result = service.resolve("1 ghante baad")
+    assert result.status is TimeResolutionStatus.RESOLVED
+    assert result.timing_intent is RideTimingIntent.SCHEDULED
+    assert result.scheduled_at == datetime(2026, 9, 9, 13, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("phrase", "reason", "intent"),
+    [
+        ("thodi der mein", "approximate_time_required", None),
+        ("aaj shaam", "specific_clock_time_required", RideTimingIntent.SCHEDULED),
+        ("schedule karni hai", "specific_clock_time_required", RideTimingIntent.SCHEDULED),
+    ],
+)
+def test_incomplete_timing_intent_requires_specificity(service, phrase, reason, intent):
+    result = service.resolve(phrase)
+    assert result.status is TimeResolutionStatus.CLARIFICATION_REQUIRED
+    assert result.clarification_reason == reason
+    assert result.timing_intent is intent
+
+
+def test_explicit_clock_time_is_scheduled(service):
+    result = service.resolve("tomorrow 6:30 AM")
+    assert result.timing_intent is RideTimingIntent.SCHEDULED

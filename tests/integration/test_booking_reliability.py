@@ -121,6 +121,26 @@ async def test_successful_retry_reuses_attempt_provider_booking_and_local_rows(d
 
 
 @pytest.mark.asyncio
+async def test_pickup_instruction_reaches_provider_snapshot_and_persisted_ride(db_session: AsyncSession):
+    user = await customer(db_session)
+    user_id = user.id
+    context = make_context(user_id)
+    context.set_pickup_instructions("HDFC Bank ke bagal mein")
+    provider = MockRideProvider()
+
+    result = await service(db_session, provider).book_ride(user.id, context)
+
+    assert result.status is BookingResultStatus.SUCCESS
+    assert provider.create_requests[0].pickup_instructions == "HDFC Bank ke bagal mein"
+    attempt = await BookingAttemptRepository(db_session).get_by_quote(
+        context.current_quote.id
+    )
+    assert attempt.authorized_quote_snapshot["request"]["pickup_instructions"] == "HDFC Bank ke bagal mein"
+    ride = await RideRepository(db_session).get_by_id_internal(result.ride.id)
+    assert ride.pickup_instructions == "HDFC Bank ke bagal mein"
+
+
+@pytest.mark.asyncio
 async def test_unknown_reconciles_before_create_and_can_finalize(db_session: AsyncSession):
     user = await customer(db_session)
     context = make_context(user.id)
@@ -195,7 +215,7 @@ async def test_provider_success_then_local_failure_recovers_without_second_creat
     provider = MockRideProvider()
     rides = FailOnceRideRepository(db_session)
     booking = service(db_session, provider, rides=rides)
-    assert (await booking.book_ride(user_id, context)).status is BookingResultStatus.OUTCOME_UNKNOWN
+    assert (await booking.book_ride(user_id, context)).status is BookingResultStatus.RECONCILIATION_PENDING
     assert await db_session.scalar(select(func.count()).select_from(Ride).where(Ride.id == (await BookingAttemptRepository(db_session).get_by_quote(context.current_quote.id)).id)) == 0
     context.current_quote = Quote(
         context.current_quote.id, context.current_quote.session_id,
@@ -210,6 +230,68 @@ async def test_provider_success_then_local_failure_recovers_without_second_creat
 
 
 @pytest.mark.asyncio
+async def test_status_reconciliation_finalizes_existing_attempt_without_second_create(
+    db_session: AsyncSession,
+):
+    user = await customer(db_session)
+    user_id = user.id
+    context = make_context(user_id)
+    provider = MockRideProvider()
+    booking = service(
+        db_session, provider, rides=FailOnceRideRepository(db_session)
+    )
+
+    first = await booking.book_ride(user_id, context)
+    recovered = await booking.reconcile_pending_booking(user_id, context)
+
+    assert first.status is BookingResultStatus.RECONCILIATION_PENDING
+    assert recovered is not None
+    assert recovered.status is BookingResultStatus.SUCCESS
+    assert provider.create_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_status_reconciliation_unknown_stays_uncertain_without_retrying_create(
+    db_session: AsyncSession,
+):
+    user = await customer(db_session)
+    context = make_context(user.id)
+    provider = MockRideProvider()
+    provider.queue_create(ProviderCreateStatus.UNKNOWN)
+    provider.queue_reconciliation(ProviderReconciliationStatus.UNKNOWN)
+    booking = service(db_session, provider)
+
+    first = await booking.book_ride(user.id, context)
+    pending = await booking.reconcile_pending_booking(user.id, context)
+
+    assert first.status is BookingResultStatus.OUTCOME_UNKNOWN
+    assert pending is not None
+    assert pending.status is BookingResultStatus.OUTCOME_UNKNOWN
+    assert provider.create_call_count == 1
+    assert provider.reconciliation_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_status_reconciliation_definitive_absence_never_retries_create(
+    db_session: AsyncSession,
+):
+    user = await customer(db_session)
+    context = make_context(user.id)
+    provider = MockRideProvider()
+    provider.queue_create(ProviderCreateStatus.UNKNOWN)
+    provider.queue_reconciliation(ProviderReconciliationStatus.DEFINITIVELY_ABSENT)
+    booking = service(db_session, provider)
+
+    await booking.book_ride(user.id, context)
+    result = await booking.reconcile_pending_booking(user.id, context)
+
+    assert result is not None
+    assert result.status is BookingResultStatus.DEFINITIVE_FAILURE
+    assert provider.create_call_count == 1
+    assert provider.reconciliation_call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_offer_change_does_not_block_confirmed_provider_recovery(db_session: AsyncSession):
     user = await customer(db_session)
     user_id = user.id
@@ -221,7 +303,7 @@ async def test_offer_change_does_not_block_confirmed_provider_recovery(db_sessio
     rides = FailOnceRideRepository(db_session)
     offers = OfferService(offer_repo, QuoteGuard())
     booking = service(db_session, provider, rides=rides, offers=offers)
-    assert (await booking.book_ride(user_id, context)).status is BookingResultStatus.OUTCOME_UNKNOWN
+    assert (await booking.book_ride(user_id, context)).status is BookingResultStatus.RECONCILIATION_PENDING
     offer = await offer_repo.get_by_id(offer_id)
     offer.active = False
     offer.version += 1

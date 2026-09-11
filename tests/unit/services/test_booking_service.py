@@ -43,15 +43,32 @@ def ready_context() -> RideContext:
 
 def test_authorization_snapshot_round_trip_is_explicit_and_versioned() -> None:
     context = ready_context()
+    context.set_pickup_instructions("SBI ATM ke saamne")
     request = RideBookingRequest(
         uuid4(), context.pickup, context.destination, context.ride_time,
         context.passenger_count, context.selected_vehicle_type_code,
+        context.pickup_instructions,
     )
     value = serialize_authorization(request, context.current_quote)
     recovered_request, recovered_quote = deserialize_authorization(value)
     assert value["version"] == 1
     assert recovered_request == request
+    assert recovered_request.pickup_instructions == "SBI ATM ke saamne"
     assert recovered_quote == context.current_quote
+
+
+def test_legacy_authorization_snapshot_without_pickup_instruction_still_loads() -> None:
+    context = ready_context()
+    request = RideBookingRequest(
+        uuid4(), context.pickup, context.destination, context.ride_time,
+        context.passenger_count, context.selected_vehicle_type_code,
+    )
+    value = serialize_authorization(request, context.current_quote)
+    del value["request"]["pickup_instructions"]
+
+    recovered_request, _ = deserialize_authorization(value)
+
+    assert recovered_request.pickup_instructions is None
 
 
 def test_invalid_authorization_snapshot_is_rejected() -> None:

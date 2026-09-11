@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from boloride.domain.models.scheduling import TimeResolutionResult, TimeResolutionStatus
+from boloride.domain.models.scheduling import RideTimingIntent
 
 
 _CLOCK = re.compile(r"(?<!\d)(1[0-2]|0?\d)(?::([0-5]\d))?\s*(am|pm)?(?!\w)", re.I)
@@ -12,6 +13,10 @@ _DAYPARTS = {
     "morning": "am", "subah": "am",
     "afternoon": "pm", "evening": "pm", "shaam": "pm", "night": "pm", "raat": "pm",
 }
+_RELATIVE_DELAY = re.compile(
+    r"(?<!\d)(\d+)\s*(?:ghant(?:a|e)|hours?)\s*(?:baad|later)(?!\w)", re.I
+)
+_IMMEDIATE_WORDS = re.compile(r"\b(?:abhi|now|immediately|asap)\b", re.I)
 logger = logging.getLogger(__name__)
 
 
@@ -29,10 +34,47 @@ class TimeResolutionService:
     ) -> TimeResolutionResult:
         text = " ".join(phrase.casefold().split())
         logger.info("time_resolution_requested", extra={"event": "time_resolution_requested", "correction": correction})
+        now = self._clock()
+        if now.tzinfo is None:
+            raise ValueError("time-resolution clock must be timezone-aware")
+
+        if _IMMEDIATE_WORDS.search(text) or "as soon as possible" in text or text == "jaldi cab bhejo":
+            return TimeResolutionResult(
+                TimeResolutionStatus.RESOLVED,
+                now.astimezone(UTC),
+                resolution_type="immediate",
+                timing_intent=RideTimingIntent.IMMEDIATE,
+            )
+
+        relative_delay = _RELATIVE_DELAY.search(text)
+        if relative_delay is not None:
+            scheduled_at = now + timedelta(hours=int(relative_delay.group(1)))
+            return TimeResolutionResult(
+                TimeResolutionStatus.RESOLVED,
+                scheduled_at.astimezone(UTC),
+                resolution_type="relative_delay",
+                timing_intent=RideTimingIntent.SCHEDULED,
+            )
+
+        if "thodi der" in text:
+            return TimeResolutionResult(
+                TimeResolutionStatus.CLARIFICATION_REQUIRED,
+                clarification_reason="approximate_time_required",
+            )
         match = _CLOCK.search(text)
         if match is None:
             logger.info("time_clarification_required", extra={"event": "time_clarification_required", "reason": "specific_clock_time_required"})
-            return TimeResolutionResult(TimeResolutionStatus.CLARIFICATION_REQUIRED, clarification_reason="specific_clock_time_required")
+            timing_intent = (
+                RideTimingIntent.SCHEDULED
+                if any(word in text.split() for word in ("schedule", "scheduled", "aaj", "kal"))
+                or any(word in text.split() for word in _DAYPARTS)
+                else None
+            )
+            return TimeResolutionResult(
+                TimeResolutionStatus.CLARIFICATION_REQUIRED,
+                clarification_reason="specific_clock_time_required",
+                timing_intent=timing_intent,
+            )
         hour, minute = int(match.group(1)), int(match.group(2) or 0)
         marker = match.group(3)
         daypart = next((value for word, value in _DAYPARTS.items() if word in text.split()), None)
@@ -45,9 +87,6 @@ class TimeResolutionService:
         if hour == 0 or hour > 12:
             return TimeResolutionResult(TimeResolutionStatus.CLARIFICATION_REQUIRED, clarification_reason="valid_12_hour_time_required")
         hour = hour % 12 + (12 if marker == "pm" else 0)
-        now = self._clock()
-        if now.tzinfo is None:
-            raise ValueError("time-resolution clock must be timezone-aware")
         local_now = now.astimezone(self._timezone)
         if any(word in text.split() for word in ("tomorrow", "kal")):
             date = local_now.date() + timedelta(days=1)
@@ -61,4 +100,9 @@ class TimeResolutionService:
         else:
             return TimeResolutionResult(TimeResolutionStatus.CLARIFICATION_REQUIRED, clarification_reason="date_required")
         local = datetime(date.year, date.month, date.day, hour, minute, tzinfo=self._timezone)
-        return TimeResolutionResult(TimeResolutionStatus.RESOLVED, local.astimezone(UTC), resolution_type=resolution_type)
+        return TimeResolutionResult(
+            TimeResolutionStatus.RESOLVED,
+            local.astimezone(UTC),
+            resolution_type=resolution_type,
+            timing_intent=RideTimingIntent.SCHEDULED,
+        )

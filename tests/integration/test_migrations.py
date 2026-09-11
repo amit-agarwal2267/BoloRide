@@ -55,6 +55,23 @@ async def schema_state(database_url: str) -> tuple[str, set[str]]:
         await engine.dispose()
 
 
+async def table_columns(database_url: str, table_name: str) -> set[str]:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            return set(
+                await connection.scalars(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = :table_name"
+                    ),
+                    {"table_name": table_name},
+                )
+            )
+    finally:
+        await engine.dispose()
+
+
 async def insert_phone_only_prototype_data(database_url: str) -> None:
     engine = create_async_engine(database_url)
     user_id = uuid4()
@@ -247,13 +264,16 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
     try:
         command.upgrade(alembic_config, "head")
         revision, tables = asyncio.run(schema_state(test_url))
-        assert revision == "015"
+        assert revision == "016"
         assert {"users", "saved_places", "rides", "vehicle_types", "pricing_rules", "accepted_quotes", "offers", "offer_redemptions", "booking_attempts", "drivers", "vehicles", "ride_assignments"}.issubset(tables)
+        assert "pickup_instructions" in asyncio.run(table_columns(test_url, "rides"))
 
-        command.downgrade(alembic_config, "014")
-        assert asyncio.run(schema_state(test_url))[0] == "014"
-        command.upgrade(alembic_config, "015")
+        command.downgrade(alembic_config, "015")
         assert asyncio.run(schema_state(test_url))[0] == "015"
+        assert "pickup_instructions" not in asyncio.run(table_columns(test_url, "rides"))
+        command.upgrade(alembic_config, "016")
+        assert asyncio.run(schema_state(test_url))[0] == "016"
+        assert "pickup_instructions" in asyncio.run(table_columns(test_url, "rides"))
 
         command.downgrade(alembic_config, "013")
         revision, tables = asyncio.run(schema_state(test_url))
@@ -293,14 +313,14 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
         assert revision == "008"
         assert not {"pricing_rules", "accepted_quotes"}.intersection(tables)
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "015"
+        assert asyncio.run(schema_state(test_url))[0] == "016"
 
         command.downgrade(alembic_config, "007")
         revision, tables = asyncio.run(schema_state(test_url))
         assert revision == "007"
         assert "vehicle_types" not in tables
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "015"
+        assert asyncio.run(schema_state(test_url))[0] == "016"
 
         command.downgrade(alembic_config, "006")
         assert asyncio.run(schema_state(test_url))[0] == "006"
@@ -308,7 +328,7 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
             insert_complete_customer_and_ride(test_url, "booked")
         )
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "015"
+        assert asyncio.run(schema_state(test_url))[0] == "016"
         assert asyncio.run(ride_status(test_url, booked_ride_id)) == "booked"
 
         command.downgrade(alembic_config, "005")
@@ -319,7 +339,7 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
 
         asyncio.run(insert_phone_only_prototype_data(test_url))
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "015"
+        assert asyncio.run(schema_state(test_url))[0] == "016"
         columns, counts = asyncio.run(identity_schema_state(test_url))
         assert {"name", "normalized_name", "age"}.issubset(columns)
         assert counts == {"rides": 0, "saved_places": 0, "users": 0}
@@ -330,7 +350,7 @@ def test_clean_database_upgrade_downgrade_and_reupgrade(
         assert not {"users", "saved_places", "rides"}.intersection(tables)
 
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "015"
+        assert asyncio.run(schema_state(test_url))[0] == "016"
     finally:
         monkeypatch.setenv("DATABASE_URL", settings.database_url)
         get_settings.cache_clear()
@@ -361,7 +381,7 @@ def test_lifecycle_upgrade_fails_without_altering_legacy_rides(
 
         asyncio.run(delete_ride(test_url, ride_id))
         command.upgrade(alembic_config, "head")
-        assert asyncio.run(schema_state(test_url))[0] == "015"
+        assert asyncio.run(schema_state(test_url))[0] == "016"
     finally:
         monkeypatch.setenv("DATABASE_URL", settings.database_url)
         get_settings.cache_clear()

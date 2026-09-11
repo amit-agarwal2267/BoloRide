@@ -1,10 +1,15 @@
 from io import BytesIO
+import logging
 
 import av
 import edge_tts
 from livekit.agents import APIConnectOptions, APIConnectionError, tts, utils
 
 from boloride.config import Settings
+from boloride.services.speech_normalizer import normalize_for_speech
+
+
+logger = logging.getLogger(__name__)
 
 
 class EdgeTTS(tts.TTS):
@@ -21,7 +26,13 @@ class EdgeTTS(tts.TTS):
         return self._voice
 
     def synthesize(self, text: str, *, conn_options: APIConnectOptions = APIConnectOptions()) -> tts.ChunkedStream:
-        return EdgeChunkedStream(tts=self, input_text=text, conn_options=conn_options, voice=self._voice)
+        spoken_text = normalize_for_speech(text)
+        if spoken_text != text:
+            logger.info(
+                "speech_normalization_applied",
+                extra={"event": "speech_normalization_applied"},
+            )
+        return EdgeChunkedStream(tts=self, input_text=spoken_text, conn_options=conn_options, voice=self._voice)
 
     async def aclose(self) -> None:
         return None

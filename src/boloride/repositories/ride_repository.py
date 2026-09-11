@@ -36,6 +36,7 @@ class RideRepository:
         provider: str,
         provider_booking_id: str,
         accepted_quote: Quote,
+        pickup_instructions: str | None = None,
     ) -> Ride:
         if pickup.latitude == destination.latitude and pickup.longitude == destination.longitude:
             raise DomainValidationError("pickup and destination must differ")
@@ -62,6 +63,7 @@ class RideRepository:
             pickup_longitude=pickup.longitude,
             pickup_provider=pickup.provider,
             pickup_provider_place_id=pickup.provider_place_id,
+            pickup_instructions=pickup_instructions,
             destination_address=destination.address,
             destination_display_name=destination.display_name,
             destination_latitude=destination.latitude,

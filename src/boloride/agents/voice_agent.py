@@ -8,7 +8,7 @@ from typing import AsyncIterator, Awaitable, Callable, Literal, TypeVar
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from livekit.agents import Agent, RunContext, function_tool
+from livekit.agents import Agent, RunContext, StopResponse, function_tool, llm
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +26,7 @@ from boloride.domain.models.location import (
     ResolvedLocation,
     customer_location_label,
 )
-from boloride.domain.models.scheduling import TimeResolutionStatus
+from boloride.domain.models.scheduling import RideTimingIntent, TimeResolutionStatus
 from boloride.domain.models.persona import AgentPersona
 from boloride.domain.models.vehicle import PassengerCountSource
 from boloride.domain.policies import CustomerIdentityState
@@ -40,6 +40,7 @@ from boloride.domain.models.dispatch import DispatchResultStatus
 from boloride.integrations.langfuse.tracing import LangfuseTracer
 from boloride.repositories.ride_repository import RideRepository
 from boloride.services.booking_service import BookingService
+from boloride.services.guardrail_service import GuardrailService
 from boloride.services.location_service import LocationService
 from boloride.services.quote_service import QuoteService
 from boloride.services.offer_service import OfferService
@@ -81,6 +82,7 @@ class BoloRideAgent(Agent):
         user_service: UserService | None = None,
         detected_phone: str | None = None,
         persona: AgentPersona | None = None,
+        guardrails: GuardrailService | None = None,
     ) -> None:
         self.ride_context = context
         self._user_id = user_id
@@ -103,9 +105,53 @@ class BoloRideAgent(Agent):
         self._user_service = user_service
         self._detected_phone = detected_phone
         self._persona = persona
+        self._guardrails = guardrails or GuardrailService()
         self._database_operation_lock = asyncio.Lock()
         self._state_operation_lock = asyncio.Lock()
         super().__init__(instructions=build_agent_instructions(base_prompt, context, persona))
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        """Stop high-confidence manipulation before it reaches the LLM."""
+        decision = self._guardrails.evaluate(new_message.raw_text_content or "")
+        if not decision.blocked:
+            return
+        count = self.ride_context.record_guardrail_block()
+        logger.info(
+            "guardrail_blocked",
+            extra={
+                "event": "guardrail_blocked",
+                "session_id": self.ride_context.session_id,
+                "guardrail_category": decision.category.value if decision.category else None,
+                "block_count": count,
+            },
+        )
+        terminate = count >= 3
+        message = (
+            "Main internal instructions ya security checks nahi badal sakti. "
+            "Main ride booking, status ya cancellation mein madad kar sakti hoon."
+            if not terminate
+            else "Main is request mein madad nahi kar sakti. Aap dobara call kar sakte hain."
+        )
+        if self._persona is not None and self._persona.gender.value == "male":
+            message = message.replace("sakti", "sakta")
+        handle = self.session.say(
+            message, allow_interruptions=False, add_to_chat_ctx=True
+        )
+        await handle.wait_for_playout()
+        if terminate:
+            self.ride_context.disconnect()
+            logger.info(
+                "guardrail_session_terminated",
+                extra={
+                    "event": "guardrail_session_terminated",
+                    "session_id": self.ride_context.session_id,
+                    "block_count": count,
+                },
+            )
+            self.session.shutdown(drain=True)
+        raise StopResponse
 
     @asynccontextmanager
     async def _slow_operation(
@@ -458,7 +504,7 @@ class BoloRideAgent(Agent):
         if self.ride_context.destination is None:
             missing.append("resolved_destination")
         if self.ride_context.ride_time is None:
-            missing.append("resolved_scheduled_time")
+            missing.append("ride_timing")
         if self.ride_context.selected_vehicle_type_code is None:
             missing.append("selected_vehicle_category")
         return json.dumps(
@@ -472,13 +518,85 @@ class BoloRideAgent(Agent):
                     "pickup": self.ride_context.pickup is not None,
                     "destination": self.ride_context.destination is not None,
                     "scheduled_time": self.ride_context.ride_time is not None,
+                    "timing_intent": (
+                        self.ride_context.timing_intent.value
+                        if self.ride_context.timing_intent
+                        else None
+                    ),
                     "passenger_count": self.ride_context.passenger_count_source
                     is PassengerCountSource.USER_PROVIDED,
                     "vehicle": self.ride_context.selected_vehicle_type_code is not None,
                     "quote": self.ride_context.current_quote is not None,
+                    "pickup_instruction_handled": self.ride_context.pickup_instruction_handled,
                 },
+                "next_optional": (
+                    "pickup_instruction"
+                    if self.ride_context.pickup is not None
+                    and not self.ride_context.pickup_instruction_handled
+                    else None
+                ),
+                "timing_instruction": (
+                    "Ask whether the ride is needed now or should be scheduled."
+                    if self.ride_context.ride_time is None
+                    and self.ride_context.timing_intent is None
+                    else None
+                ),
             }
         )
+
+    @function_tool
+    async def set_pickup_instructions(
+        self,
+        instructions: str | None = None,
+        declined: bool = False,
+        remove: bool = False,
+    ) -> str:
+        """Add, update, decline, or remove an optional driver-facing pickup note; never use this to resolve or geocode pickup."""
+        async with self._state_operation_lock:
+            if self._verified_user() is None:
+                return json.dumps({"status": "identity_required"})
+            if self.ride_context.pickup is None:
+                return json.dumps({"status": "resolved_pickup_required"})
+            previous = self.ride_context.pickup_instructions
+            if remove:
+                self.ride_context.remove_pickup_instructions()
+                event = "pickup_instruction_removed"
+            elif declined:
+                self.ride_context.decline_pickup_instructions()
+                event = "pickup_instruction_declined"
+            elif instructions is not None:
+                try:
+                    self.ride_context.set_pickup_instructions(instructions)
+                except DomainValidationError as exc:
+                    return json.dumps(
+                        {"status": "pickup_instruction_invalid", "message": str(exc)}
+                    )
+                event = (
+                    "pickup_instruction_updated"
+                    if previous is not None
+                    else "pickup_instruction_added"
+                )
+            else:
+                return json.dumps(
+                    {
+                        "status": "pickup_instruction_choice_required",
+                        "instruction": "Ask whether the customer wants to provide an optional nearby landmark or driver note.",
+                    }
+                )
+            logger.info(
+                event,
+                extra={
+                    "event": event,
+                    "session_id": self.ride_context.session_id,
+                },
+            )
+            return json.dumps(
+                {
+                    "status": event,
+                    "quote_invalidated": False,
+                    "instruction": "Acknowledge briefly. Do not repeat or creatively rewrite the driver note.",
+                }
+            )
 
     @function_tool
     async def get_saved_places(self) -> str:
@@ -874,26 +992,89 @@ class BoloRideAgent(Agent):
     def _set_ride_time_locked(self, time_phrase: str, correction: bool = False) -> str:
         if self._verified_user() is None:
             return "Customer identification is required before planning a ride."
+        previous_time = self.ride_context.ride_time
+        previous_intent = self.ride_context.timing_intent
         result = self._time_resolution.resolve(
             time_phrase, previous=self.ride_context.ride_time, correction=correction
         )
         if result.status is TimeResolutionStatus.CLARIFICATION_REQUIRED:
-            return f"Time clarification required: {result.clarification_reason}."
+            if result.timing_intent is RideTimingIntent.SCHEDULED:
+                self.ride_context.set_incomplete_timing_intent(
+                    RideTimingIntent.SCHEDULED
+                )
+                logger.info(
+                    "timing_intent_scheduled",
+                    extra={
+                        "event": "timing_intent_scheduled",
+                        "session_id": self.ride_context.session_id,
+                        "complete": False,
+                    },
+                )
+            else:
+                logger.info(
+                    "timing_intent_missing",
+                    extra={
+                        "event": "timing_intent_missing",
+                        "session_id": self.ride_context.session_id,
+                        "reason": result.clarification_reason,
+                    },
+                )
+            return json.dumps(
+                {
+                    "status": "time_clarification_required",
+                    "reason": result.clarification_reason,
+                    "timing_intent": (
+                        result.timing_intent.value if result.timing_intent else None
+                    ),
+                    "instruction": (
+                        "Ask for an approximate or specific time."
+                        if result.clarification_reason == "approximate_time_required"
+                        else "Ask only for the missing day or specific clock time."
+                    ),
+                }
+            )
         assert result.scheduled_at is not None
-        changed = self.ride_context.ride_time != result.scheduled_at
-        self.ride_context.update_ride_time(result.scheduled_at)
+        assert result.timing_intent is not None
+        changed = (
+            previous_time != result.scheduled_at
+            or previous_intent is not result.timing_intent
+        )
+        corrected = correction or (
+            previous_intent is not None and previous_intent is not result.timing_intent
+        )
+        self.ride_context.update_ride_timing(
+            result.timing_intent, result.scheduled_at
+        )
         logger.info("time_resolved", extra={"event": "time_resolved", "session_id": self.ride_context.session_id, "resolution_type": result.resolution_type, "correction": correction})
-        if correction:
-            logger.info("time_correction", extra={"event": "time_correction", "session_id": self.ride_context.session_id})
+        timing_event = (
+            "timing_intent_immediate"
+            if result.timing_intent is RideTimingIntent.IMMEDIATE
+            else "timing_intent_scheduled"
+        )
+        logger.info(
+            timing_event,
+            extra={
+                "event": timing_event,
+                "session_id": self.ride_context.session_id,
+                "complete": True,
+            },
+        )
+        if corrected:
+            logger.info("timing_intent_corrected", extra={"event": "timing_intent_corrected", "session_id": self.ride_context.session_id})
         if changed:
             logger.info("scheduled_time_changed", extra={"event": "scheduled_time_changed", "session_id": self.ride_context.session_id})
             logger.info("downstream_quote_invalidated", extra={"event": "downstream_quote_invalidated", "session_id": self.ride_context.session_id, "reason": "scheduled_time_changed"})
         return json.dumps(
             {
-                "status": "ride_time_corrected" if correction else "ride_time_established",
+                "status": "ride_time_corrected" if corrected else "ride_time_established",
+                "timing_intent": result.timing_intent.value,
                 "scheduled_at": result.scheduled_at.isoformat(),
                 "quote_invalidated": changed,
-                "instruction": "Acknowledge this time locally and briefly; do not repeat the full booking summary.",
+                "instruction": (
+                    "Acknowledge briefly that the ride is for now."
+                    if result.timing_intent is RideTimingIntent.IMMEDIATE
+                    else "Acknowledge this time locally and briefly; do not repeat the full booking summary."
+                ),
             }
         )
 
@@ -932,6 +1113,23 @@ class BoloRideAgent(Agent):
         user_id = self._verified_user()
         if user_id is None:
             return "Customer identification is required before accessing rides."
+        pending = await self._database_call(
+            lambda: self._booking.reconcile_pending_booking(
+                user_id, self.ride_context
+            )
+        )
+        if pending is not None and pending.status in {
+            BookingResultStatus.OUTCOME_UNKNOWN,
+            BookingResultStatus.IN_PROGRESS,
+        }:
+            return _booking_status_unknown_message()
+        if (
+            pending is not None
+            and pending.status is BookingResultStatus.RECONCILIATION_PENDING
+        ):
+            return _booking_reconciliation_pending_message()
+        if pending is not None and pending.status is BookingResultStatus.DEFINITIVE_FAILURE:
+            return "Provider ne confirm kiya hai ki is request par ride book nahi hui."
         with self._tracer.observe(
             "ride_status_lookup",
             observation_type="tool",
@@ -1208,8 +1406,31 @@ class BoloRideAgent(Agent):
             state = result.ride.status.value if result.ride else "unavailable"
             return f"The ride is now {state}, so cancellation was not applied."
         if result.status is CancellationResultStatus.IDEMPOTENT_SUCCESS:
-            return "Ride pehle hi cancel ho chuki hai. Final customer cost INR 0 hai."
-        return "Ride cancel ho gayi hai. Final customer cost INR 0 hai."
+            return "Ride pehle hi cancel ho chuki hai. Final customer cost INR 0 hai. Aur kisi cheez mein madad chahiye?"
+        return "Ride cancel ho gayi hai. Final customer cost INR 0 hai. Aur kisi cheez mein madad chahiye?"
+
+    @function_tool
+    async def finish_session(
+        self, run_context: RunContext = None  # type: ignore[assignment]
+    ) -> str:
+        """End the session only after the customer clearly says they need nothing else or want to disconnect."""
+        if run_context is None:
+            return json.dumps({"status": "session_completion_unavailable"})
+        message = "Theek hai. BoloRide ko call karne ke liye dhanyavaad."
+        handle = run_context.session.say(
+            message, allow_interruptions=False, add_to_chat_ctx=True
+        )
+        await handle.wait_for_playout()
+        self.ride_context.disconnect()
+        logger.info(
+            "session_completed",
+            extra={
+                "event": "session_completed",
+                "session_id": self.ride_context.session_id,
+            },
+        )
+        run_context.session.shutdown(drain=True)
+        return json.dumps({"status": "session_completed", "reply_already_spoken": True})
 
     @function_tool
     async def record_booking_confirmation(self, explicitly_confirmed: bool) -> str:
@@ -1699,7 +1920,9 @@ class BoloRideAgent(Agent):
             BookingResultStatus.OUTCOME_UNKNOWN,
             BookingResultStatus.IN_PROGRESS,
         }:
-            return "We're still confirming whether the booking went through."
+            return _booking_status_unknown_message()
+        if outcome.status is BookingResultStatus.RECONCILIATION_PENDING:
+            return _booking_reconciliation_pending_message()
         if outcome.status is BookingResultStatus.ACTIVE_RIDE_EXISTS:
             active = outcome.active_ride
             logger.info(
@@ -1727,14 +1950,14 @@ class BoloRideAgent(Agent):
             return "The booking provider confirmed that no ride was booked."
         result = outcome.provider_result
         if result is None or outcome.accepted_quote is None:
-            return "We're still confirming whether the booking went through."
+            return _booking_status_unknown_message()
         return (
             f"Ride book ho gayi hai. Driver {result.driver_name}; "
             f"vehicle {result.vehicle_description}; "
             f"accepted estimated fare {outcome.accepted_quote.pricing.currency} "
-            f"{outcome.accepted_quote.pricing.estimated_total:.0f}."
+            f"{outcome.accepted_quote.pricing.estimated_total:.0f}. "
+            "Aur kisi cheez mein madad chahiye?"
         )
-
     def _set_location(
         self, role: Literal["pickup", "destination"], location: ResolvedLocation
     ) -> None:
@@ -1811,4 +2034,20 @@ def _ride_ambiguity_response(
             "customer_safe_candidates": lines,
             "instruction": "Ask the customer which numbered or naturally described ride they mean. Do not ask for an ID.",
         }
+    )
+
+
+def _booking_status_unknown_message() -> str:
+    return (
+        "Booking request provider tak pahunch sakti hai, lekin final status abhi "
+        "verify nahi hua hai. Main duplicate booking nahi karungi; status dobara "
+        "check kiya ja sakta hai."
+    )
+
+
+def _booking_reconciliation_pending_message() -> str:
+    return (
+        "Provider ne booking request accept ki hai, lekin final status abhi "
+        "verify nahi hua hai. Main duplicate booking nahi karungi; status dobara "
+        "check kiya ja sakta hai."
     )

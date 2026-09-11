@@ -17,6 +17,7 @@ class BookingResultStatus(StrEnum):
     IDEMPOTENT_SUCCESS = "idempotent_success"
     DEFINITIVE_FAILURE = "definitive_failure"
     OUTCOME_UNKNOWN = "outcome_unknown"
+    RECONCILIATION_PENDING = "reconciliation_pending"
     IN_PROGRESS = "in_progress"
     REQUOTE_REQUIRED = "requote_required"
     ACTIVE_RIDE_EXISTS = "active_ride_exists"

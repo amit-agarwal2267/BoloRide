@@ -23,6 +23,7 @@ def serialize_authorization(request: RideBookingRequest, quote: Quote) -> dict:
             "requested_ride_at": request.requested_ride_at.isoformat(),
             "passenger_count": request.passenger_count,
             "vehicle_type_code": request.vehicle_type_code,
+            "pickup_instructions": request.pickup_instructions,
         },
         "quote": {
             "id": str(quote.id),
@@ -78,6 +79,7 @@ def deserialize_authorization(value: object) -> tuple[RideBookingRequest, Quote]
             UUID(request_data["request_id"]), _deserialize_location(request_data["pickup"]),
             _deserialize_location(request_data["destination"]), datetime.fromisoformat(request_data["requested_ride_at"]),
             int(request_data["passenger_count"]), request_data["vehicle_type_code"],
+            request_data.get("pickup_instructions"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise DomainValidationError("invalid booking authorization recovery snapshot") from exc
