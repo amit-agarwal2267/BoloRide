@@ -15,6 +15,7 @@ class RideBookingRequest:
 	requested_ride_at: datetime
 	passenger_count: int
 	vehicle_type_code: str
+	pickup_instructions: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

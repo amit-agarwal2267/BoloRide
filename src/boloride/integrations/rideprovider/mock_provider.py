@@ -21,6 +21,7 @@ class MockRideProvider:
         self.create_call_count = 0
         self.reconciliation_call_count = 0
         self.create_idempotency_keys: list[str] = []
+        self.create_requests: list[RideBookingRequest] = []
 
     @property
     def logical_booking_count(self) -> int:
@@ -37,6 +38,7 @@ class MockRideProvider:
     ) -> ProviderCreateOutcome:
         self.create_call_count += 1
         self.create_idempotency_keys.append(idempotency_key)
+        self.create_requests.append(request)
         existing = self._bookings.get(idempotency_key)
         if existing is not None:
             return ProviderCreateOutcome(ProviderCreateStatus.CONFIRMED, existing)

@@ -79,7 +79,7 @@ class BookingService:
             request_id = uuid4()
             request = RideBookingRequest(
                 request_id, context.pickup, context.destination, context.ride_time,
-                context.passenger_count, vehicle.code,
+                context.passenger_count, vehicle.code, context.pickup_instructions,
             )
             created = await self._create_attempt(user_id, request, quote, offer)
             if isinstance(created, BookingOutcome):
@@ -91,6 +91,30 @@ class BookingService:
             raise DomainValidationError("booking attempt does not belong to this customer and quote")
 
         return await self._continue_attempt(attempt, context)
+
+    async def reconcile_pending_booking(
+        self, user_id: UUID, context: RideContext
+    ) -> BookingOutcome | None:
+        """Resolve an existing owned attempt without starting a new provider call."""
+        if not context.identity_verified or context.verified_customer_id != user_id:
+            raise DomainValidationError(
+                "verified customer identity is required before checking booking status"
+            )
+        attempt = await self._attempts.get_open_for_customer(user_id)
+        if attempt is None:
+            return None
+        state = BookingAttemptState(attempt.state)
+        if state is BookingAttemptState.PROVIDER_CONFIRMED:
+            return await self._finalize(attempt, context)
+        if state is BookingAttemptState.OUTCOME_UNKNOWN:
+            return await self._reconcile(attempt, context, allow_provider_retry=False)
+        if state is BookingAttemptState.PROVIDER_CALLING:
+            started = attempt.provider_call_started_at
+            if started is None or datetime.now(UTC) - started >= self._provider_call_lease:
+                return await self._reconcile(
+                    attempt, context, allow_provider_retry=False
+                )
+        return BookingOutcome(BookingResultStatus.IN_PROGRESS)
 
     async def _create_attempt(
         self, user_id, request, quote, offer
@@ -246,10 +270,12 @@ class BookingService:
         except Exception as exc:
             await self._session.rollback()
             logger.warning("provider_confirmation_persistence_failed", extra={"event": "provider_confirmation_persistence_failed", "attempt_id": str(attempt_id), "provider": provider_name, "error_type": type(exc).__name__})
-            return BookingOutcome(BookingResultStatus.OUTCOME_UNKNOWN)
+            return BookingOutcome(BookingResultStatus.RECONCILIATION_PENDING)
         return await self._finalize(attempt, context)
 
-    async def _reconcile(self, attempt, context) -> BookingOutcome:
+    async def _reconcile(
+        self, attempt, context, *, allow_provider_retry: bool = True
+    ) -> BookingOutcome:
         logger.info("booking_reconciliation_attempted", extra={"event": "booking_reconciliation_attempted", "attempt_id": str(attempt.id), "provider": attempt.provider})
         try:
             outcome = await self._provider.reconcile_booking(attempt.provider_idempotency_key)
@@ -263,12 +289,19 @@ class BookingService:
             except Exception as exc:
                 await self._session.rollback()
                 logger.warning("provider_confirmation_persistence_failed", extra={"event": "provider_confirmation_persistence_failed", "attempt_id": str(attempt_id), "provider": provider_name, "error_type": type(exc).__name__})
-                return BookingOutcome(BookingResultStatus.OUTCOME_UNKNOWN)
+                return BookingOutcome(BookingResultStatus.RECONCILIATION_PENDING)
             return await self._finalize(attempt, context)
         if outcome.status is ProviderReconciliationStatus.UNKNOWN:
             await self._persist_unknown(attempt.id, outcome.failure_category, reconciled=True)
             return BookingOutcome(BookingResultStatus.OUTCOME_UNKNOWN)
 
+        if not allow_provider_retry:
+            await self._persist_terminal(
+                attempt.id,
+                BookingAttemptState.DEFINITIVELY_FAILED,
+                "provider_booking_definitively_absent",
+            )
+            return BookingOutcome(BookingResultStatus.DEFINITIVE_FAILURE)
         if not self._provider.supports_safe_retry_after_definitive_absence:
             await self._persist_terminal(attempt.id, BookingAttemptState.REQUOTE_REQUIRED, "provider_retry_not_safe")
             return BookingOutcome(BookingResultStatus.REQUOTE_REQUIRED)
@@ -338,6 +371,7 @@ class BookingService:
                     locked.id, locked.customer_id, request.pickup, request.destination,
                     request.requested_ride_at, provider=result.provider,
                     provider_booking_id=result.provider_booking_id, accepted_quote=quote,
+                    pickup_instructions=request.pickup_instructions,
                 )
             if locked.offer_id is not None and locked.capacity_reserved:
                 if self._offers is None:
@@ -350,7 +384,7 @@ class BookingService:
         except Exception as exc:
             await self._session.rollback()
             logger.warning("local_booking_finalization_failed", extra={"event": "local_booking_finalization_failed", "attempt_id": str(attempt_id), "provider": provider_name, "error_type": type(exc).__name__})
-            return BookingOutcome(BookingResultStatus.OUTCOME_UNKNOWN)
+            return BookingOutcome(BookingResultStatus.RECONCILIATION_PENDING)
         context.booking_id = ride.id
         context.booking_confirmed = True
         return BookingOutcome(BookingResultStatus.SUCCESS, ride, result, quote)

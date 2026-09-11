@@ -10,6 +10,7 @@ from livekit.plugins import dtln
 from boloride.agents.context import RideContext
 from boloride.agents.lifecycle import voice_session_trace
 from boloride.agents.session import BoloRideLiveKitLLM
+from boloride.agents.session_lifecycle import SessionLifecycleController
 from boloride.agents.voice_agent import BoloRideAgent
 from boloride.config import get_settings
 from boloride.domain.exceptions import DomainValidationError
@@ -73,6 +74,7 @@ async def entrypoint(ctx: JobContext) -> None:
     tracer = LangfuseTracer(langfuse)
     trace_manager = voice_session_trace(tracer, session_id)
     trace = trace_manager.__enter__()
+    lifecycle: SessionLifecycleController | None = None
     llm_router = create_llm_router(settings, tracer)
     maps_router = MapsRouter(settings)
     persona = PersonaSelector(
@@ -90,6 +92,8 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     async def shutdown() -> None:
+        if lifecycle is not None:
+            await lifecycle.aclose()
         quotes.disconnect(ride_context)
         trace.update(metadata={"success": True})
         trace_manager.__exit__(None, None, None)
@@ -185,6 +189,7 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=BoloRideLiveKitLLM(llm_router, session_id=session_id),
         tts=TTSRouter(settings, voice=persona.edge_tts_voice).get_provider().get_livekit_tts(),
         vad=silero.VAD.load(),
+        user_away_timeout=None,
     )
     welcome_completed = asyncio.Event()
     room_option_values = {
@@ -207,6 +212,8 @@ async def entrypoint(ctx: JobContext) -> None:
         await play_deterministic_welcome(session, persona, session_id)
     finally:
         welcome_completed.set()
+    lifecycle = SessionLifecycleController(session, ride_context, persona)
+    lifecycle.start()
     logger.info(
         "voice_session_started",
         extra={

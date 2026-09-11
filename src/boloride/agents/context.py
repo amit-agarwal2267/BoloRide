@@ -4,7 +4,9 @@ from uuid import UUID
 
 from boloride.domain.models.location import LocationCandidate, ResolvedLocation, RouteResult
 from boloride.domain.models.quote import Quote
+from boloride.domain.models.scheduling import RideTimingIntent
 from boloride.domain.models.vehicle import PassengerCountSource
+from boloride.domain.models.pickup_instruction import normalize_pickup_instruction
 from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.policies import CustomerIdentityState
 
@@ -22,6 +24,9 @@ class RideContext:
 	destination: ResolvedLocation | None = None
 	route: RouteResult | None = None
 	ride_time: datetime | None = None
+	timing_intent: RideTimingIntent | None = None
+	pickup_instructions: str | None = None
+	pickup_instruction_handled: bool = False
 	passenger_count: int = 1
 	passenger_count_source: PassengerCountSource = PassengerCountSource.DEFAULT
 	selected_vehicle_type_code: str | None = None
@@ -51,6 +56,7 @@ class RideContext:
 	destination_clarification_count: int = 0
 	ride_reference_candidates: tuple[UUID, ...] = ()
 	ride_reference_purpose: str | None = None
+	guardrail_block_count: int = 0
 
 	@property
 	def identity_verified(self) -> bool:
@@ -211,6 +217,38 @@ class RideContext:
 		if self.ride_time != ride_time:
 			self.ride_time = ride_time
 			self._invalidate_quote()
+
+	def update_ride_timing(
+		self, intent: RideTimingIntent, ride_time: datetime
+	) -> None:
+		if ride_time.tzinfo is None:
+			raise DomainValidationError("ride time must be timezone-aware")
+		if self.timing_intent != intent or self.ride_time != ride_time:
+			self.timing_intent = intent
+			self.ride_time = ride_time
+			self._invalidate_quote()
+
+	def set_incomplete_timing_intent(self, intent: RideTimingIntent) -> None:
+		if self.timing_intent != intent or self.ride_time is not None:
+			self.timing_intent = intent
+			self.ride_time = None
+			self._invalidate_quote()
+
+	def set_pickup_instructions(self, instructions: str) -> None:
+		self.pickup_instructions = normalize_pickup_instruction(instructions)
+		self.pickup_instruction_handled = True
+
+	def decline_pickup_instructions(self) -> None:
+		self.pickup_instructions = None
+		self.pickup_instruction_handled = True
+
+	def remove_pickup_instructions(self) -> None:
+		self.pickup_instructions = None
+		self.pickup_instruction_handled = True
+
+	def record_guardrail_block(self) -> int:
+		self.guardrail_block_count += 1
+		return self.guardrail_block_count
 
 	def update_passenger_count(
 		self,

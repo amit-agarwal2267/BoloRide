@@ -81,6 +81,7 @@ class Ride(Base):
     pickup_longitude: Mapped[Decimal] = mapped_column(Numeric(9, 6), nullable=False)
     pickup_provider: Mapped[str | None] = mapped_column(String(50))
     pickup_provider_place_id: Mapped[str | None] = mapped_column(String(255))
+    pickup_instructions: Mapped[str | None] = mapped_column(String(500))
     destination_address: Mapped[str] = mapped_column(Text, nullable=False)
     destination_display_name: Mapped[str | None] = mapped_column(String(255))
     destination_latitude: Mapped[Decimal] = mapped_column(Numeric(9, 6), nullable=False)
