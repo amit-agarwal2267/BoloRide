@@ -33,16 +33,17 @@ class Settings(BaseSettings):
     langfuse_timeout_seconds: int = Field(default=5, gt=0)
     prompt_fallback_enabled: bool = True
 
-    llm_primary_provider: Literal["google", "groq"] = "google"
+    llm_primary_provider: Literal["google", "groq", "openai"] = "google"
     llm_primary_model: str | None = None
-    llm_fallback_1_provider: Literal["google", "groq"] | None = "google"
+    llm_fallback_1_provider: Literal["google", "groq", "openai"] | None = "google"
     llm_fallback_1_model: str | None = None
-    llm_fallback_2_provider: Literal["google", "groq"] | None = "groq"
+    llm_fallback_2_provider: Literal["google", "groq", "openai"] | None = "groq"
     llm_fallback_2_model: str | None = None
     llm_timeout_seconds: float = Field(default=15.0, gt=0)
     llm_max_retries: int = Field(default=1, ge=0, le=2)
     google_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
 
     maps_provider: Literal["google", "ola"] = "ola"
     google_maps_api_key: SecretStr | None = None

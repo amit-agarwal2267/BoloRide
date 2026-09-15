@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any, Literal
 from uuid import uuid4
 
-ProviderName = Literal["google", "groq"]
+ProviderName = Literal["google", "groq", "openai"]
 MessageRole = Literal["user", "assistant", "tool"]
 
 

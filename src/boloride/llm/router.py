@@ -16,6 +16,7 @@ from boloride.llm.base import (
 from boloride.llm.models import LLMRequest, LLMResponse, LLMRoute, ProviderName
 from boloride.llm.providers.google import GoogleLLMProvider
 from boloride.llm.providers.groq import GroqLLMProvider
+from boloride.llm.providers.openai import OpenAILLMProvider
 from boloride.observability.llm_pricing import apply_llm_cost
 
 logger = logging.getLogger(__name__)
@@ -241,6 +242,13 @@ def create_llm_router(settings: Settings, tracer: Tracer) -> LLMRouter:
             raise LLMConfigurationError("GROQ_API_KEY is required for Groq routes")
         providers["groq"] = GroqLLMProvider(
             settings.groq_api_key.get_secret_value(),
+            timeout_seconds=settings.llm_timeout_seconds,
+        )
+    if "openai" in configured_names:
+        if settings.openai_api_key is None:
+            raise LLMConfigurationError("OPENAI_API_KEY is required for OpenAI routes")
+        providers["openai"] = OpenAILLMProvider(
+            settings.openai_api_key.get_secret_value(),
             timeout_seconds=settings.llm_timeout_seconds,
         )
     return LLMRouter(
