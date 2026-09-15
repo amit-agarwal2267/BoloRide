@@ -95,6 +95,7 @@ class FleetRepository:
                 Driver.city,
                 Driver.state,
                 Vehicle.vehicle_type_code,
+                Vehicle.model_name,
                 Vehicle.registration_number,
                 Vehicle.active,
             )
@@ -127,12 +128,24 @@ class FleetRepository:
                     id=member.vehicle_id,
                     driver_id=member.driver_id,
                     vehicle_type_code=member.vehicle_type_code,
+                    model_name=member.vehicle_model,
                     registration_number=member.registration_number,
                     active=True,
                 )
                 for member in members
             ]
         )
+        await self._session.flush()
+
+    async def update_seed_models(
+        self, members: tuple[DemoFleetMember, ...]
+    ) -> None:
+        for member in members:
+            await self._session.execute(
+                update(Vehicle)
+                .where(Vehicle.id == member.vehicle_id)
+                .values(model_name=member.vehicle_model)
+            )
         await self._session.flush()
 
     async def geography_counts(self, seed_version: str) -> dict[str, int]:

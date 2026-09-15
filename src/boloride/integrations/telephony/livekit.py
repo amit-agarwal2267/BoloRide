@@ -20,6 +20,8 @@ from boloride.integrations.langfuse.client import LangfuseClient
 from boloride.integrations.langfuse.tracing import LangfuseTracer
 from boloride.integrations.maps.router import MapsRouter
 from boloride.integrations.rideprovider.mock_provider import MockRideProvider
+from boloride.integrations.telephony.sip import trusted_sip_caller_phone
+from boloride.integrations.notifications.livekit import LiveKitDemoInboxProvider
 from boloride.llm.router import create_llm_router
 from boloride.observability.logger import configure_logging
 from boloride.observability.tracing import (
@@ -27,7 +29,7 @@ from boloride.observability.tracing import (
     SessionOutcome,
     VoiceSessionMetadata,
 )
-from boloride.prompts.registry import PromptKey, PromptRegistry
+from boloride.prompts.registry import PromptRegistry
 from boloride.repositories.booking_attempt_repository import BookingAttemptRepository
 from boloride.repositories.assignment_repository import AssignmentRepository
 from boloride.repositories.fleet_repository import FleetRepository
@@ -49,6 +51,7 @@ from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.user_service import UserService
 from boloride.services.time_resolution_service import TimeResolutionService
 from boloride.services.vehicle_service import VehicleService
+from boloride.services.notification_service import NotificationService
 from boloride.speech.stt.router import STTRouter
 from boloride.speech.tts.router import TTSRouter
 
@@ -70,7 +73,7 @@ server = AgentServer(
 @server.rtc_session(agent_name=settings.livekit_agent_name)
 async def entrypoint(ctx: JobContext) -> None:
     session_id = ctx.job.id
-    input_mode = _client_input_mode(ctx)
+    input_mode = _client_input_mode(ctx, settings.telephony_provider)
     ctx.log_context_fields = {"session_id": session_id}
     engine = create_database_engine(settings)
     database_session = create_session_factory(engine)()
@@ -78,7 +81,13 @@ async def entrypoint(ctx: JobContext) -> None:
     tracer = LangfuseTracer(langfuse)
     lifecycle: SessionLifecycleController | None = None
     persona = PersonaSelector(
-        build_staff_personas(settings.tts_male_voice, settings.tts_female_voice)
+        build_staff_personas(
+            settings.tts_male_voice,
+            settings.tts_female_voice,
+            settings.sarvam_tts_male_speaker,
+            settings.sarvam_tts_female_speaker,
+            settings.tts_persona,
+        )
     ).select()
     logger.info(
         "staff_persona_selected",
@@ -86,27 +95,30 @@ async def entrypoint(ctx: JobContext) -> None:
             "event": "staff_persona_selected",
             "session_id": session_id,
             "persona_id": persona.persona_id,
-            "staff_name": persona.display_name,
+            "persona_name": persona.display_name,
             "gender": persona.gender.value,
+            "tts_speaker": persona.tts_speaker,
         },
     )
 
-    prompt = PromptRegistry(
+    prompt_bundle = PromptRegistry(
         langfuse,
         label=settings.langfuse_prompt_label,
         fallback_enabled=settings.prompt_fallback_enabled,
-    ).get(PromptKey.VOICE_AGENT)
+    ).get_bundle()
     observability = ObservabilityContext.start_voice_session(
         tracer,
         session_id=session_id,
         metadata=VoiceSessionMetadata(
             persona_id=persona.persona_id,
             persona_gender=persona.gender.value,
+            persona_name=persona.display_name,
+            tts_speaker=persona.tts_speaker,
             interaction_mode=input_mode,
             stt_provider=settings.stt_provider,
             maps_provider=settings.maps_provider,
             tts_provider=settings.tts_provider,
-            prompt_source=prompt.source,
+            prompt_source=prompt_bundle.source,
             environment=settings.app_env,
         ),
     )
@@ -135,7 +147,22 @@ async def entrypoint(ctx: JobContext) -> None:
 
     users = UserRepository(database_session)
     user_service = UserService(users)
-    detected_phone = _caller_phone(ctx, settings.development_caller_phone)
+    detected_phone = _caller_phone(
+        ctx,
+        settings.development_caller_phone,
+        settings.telephony_provider,
+        settings.livekit_sip_trunk_id,
+        settings.browser_demo_caller_phone,
+    )
+    logger.info(
+        "trusted_caller_metadata_resolved",
+        extra={
+            "event": "trusted_caller_metadata_resolved",
+            "session_id": session_id,
+            "telephony_provider": settings.telephony_provider,
+            "trusted_caller_metadata_present": detected_phone is not None,
+        },
+    )
     logger.info("customer_identity_started", extra={"event": "customer_identity_started", "session_id": session_id})
     try:
         identity = await user_service.begin_identity(detected_phone)
@@ -177,7 +204,7 @@ async def entrypoint(ctx: JobContext) -> None:
         verified_customer_id=None,
     )
     agent = BoloRideAgent(
-        base_prompt=prompt.content,
+        prompt_bundle=prompt_bundle,
         context=ride_context,
         user_id=None,
         database_session=database_session,
@@ -206,13 +233,18 @@ async def entrypoint(ctx: JobContext) -> None:
         user_service=user_service,
         detected_phone=detected_phone,
         persona=persona,
+        notifications=NotificationService(LiveKitDemoInboxProvider(ctx.room)),
     )
     ctx.add_shutdown_callback(shutdown)
     stt_obj = _session_stt(input_mode)
     session = AgentSession(
         stt=stt_obj,
         llm=BoloRideLiveKitLLM(llm_router, session_id=session_id),
-        tts=TTSRouter(settings, voice=persona.edge_tts_voice).get_provider().get_livekit_tts(),
+        tts=TTSRouter(
+            settings,
+            voice=persona.edge_tts_voice,
+            speaker=persona.tts_speaker,
+        ).get_provider().get_livekit_tts(),
         vad=silero.VAD.load(),
         user_away_timeout=None,
     )
@@ -250,7 +282,7 @@ async def entrypoint(ctx: JobContext) -> None:
             "stt_provider": settings.stt_provider if stt_obj is not None else "disabled",
             "maps_provider": settings.maps_provider,
             "tts_provider": settings.tts_provider,
-            "prompt_source": prompt.source,
+            "prompt_source": prompt_bundle.source,
         },
     )
 
@@ -305,8 +337,13 @@ def _deferred_text_input_callback(
     return handle_text_input
 
 
-def _client_input_mode(ctx: JobContext) -> str:
+def _client_input_mode(
+    ctx: JobContext,
+    telephony_provider: str = "console",
+) -> str:
     """Disable STT only for an explicitly identified development text client."""
+    if telephony_provider in {"twilio", "exotel"}:
+        return "telephony"
     metadata = getattr(ctx.job, "metadata", None)
     if isinstance(metadata, str) and metadata.strip():
         try:
@@ -325,8 +362,22 @@ def _session_stt(input_mode: str):
     return STTRouter(settings).get_provider().get_livekit_stt()
 
 
-def _caller_phone(ctx: JobContext, development_phone: str | None) -> str | None:
-    """Read adapter-owned phone metadata, falling back only to explicit dev config."""
+def _caller_phone(
+    ctx: JobContext,
+    development_phone: str | None,
+    telephony_provider: str = "console",
+    sip_trunk_id: str | None = None,
+    browser_demo_phone: str | None = None,
+) -> str | None:
+    """Resolve caller metadata without crossing production/development trust zones."""
+    if telephony_provider in {"twilio", "exotel"}:
+        return trusted_sip_caller_phone(
+            getattr(ctx.room, "remote_participants", {}).values(), sip_trunk_id
+        )
+    if telephony_provider == "browser":
+        return browser_demo_phone
+
+    # Console-only metadata supports disposable local text/microphone clients.
     metadata = getattr(ctx.job, "metadata", None)
     if isinstance(metadata, str) and metadata.strip():
         try:
@@ -345,7 +396,5 @@ def _caller_phone(ctx: JobContext, development_phone: str | None) -> str | None:
             if isinstance(value, str) and value.strip():
                 return value
     return development_phone
-
-
 if __name__ == "__main__":
     cli.run_app(server)

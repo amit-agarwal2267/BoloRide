@@ -12,6 +12,7 @@ from boloride.db.models.vehicle import Vehicle
 from boloride.db.models.vehicle_type import VehicleType
 from boloride.domain.enums import RideStatus
 from boloride.domain.models.fleet import DriverAvailability
+from boloride.domain.models.dispatch import AssignmentDetails
 
 
 class AssignmentRepository:
@@ -31,8 +32,19 @@ class AssignmentRepository:
         ).one_or_none()
         return row._tuple() if row else None
 
-    async def create(self, ride_id: UUID, driver_id: UUID, vehicle_id: UUID) -> RideAssignment:
-        assignment = RideAssignment(ride_id=ride_id, driver_id=driver_id, vehicle_id=vehicle_id)
+    async def create(
+        self,
+        ride_id: UUID,
+        driver_id: UUID,
+        vehicle_id: UUID,
+        eta_minutes: int,
+    ) -> RideAssignment:
+        assignment = RideAssignment(
+            ride_id=ride_id,
+            driver_id=driver_id,
+            vehicle_id=vehicle_id,
+            eta_minutes=eta_minutes,
+        )
         self._session.add(assignment)
         await self._session.flush()
         return assignment
@@ -47,10 +59,15 @@ class AssignmentRepository:
 
     async def assignment_status_details(
         self, ride_id: UUID
-    ) -> tuple[str, str, str] | None:
+    ) -> tuple[str, str, str, int] | None:
         row = (
             await self._session.execute(
-                select(Driver.name, Vehicle.registration_number, VehicleType.display_name)
+                select(
+                    Driver.name,
+                    Vehicle.registration_number,
+                    Vehicle.model_name,
+                    RideAssignment.eta_minutes,
+                )
                 .join(Vehicle, Vehicle.driver_id == Driver.id)
                 .join(VehicleType, VehicleType.code == Vehicle.vehicle_type_code)
                 .join(RideAssignment, RideAssignment.vehicle_id == Vehicle.id)
@@ -58,6 +75,28 @@ class AssignmentRepository:
             )
         ).one_or_none()
         return row._tuple() if row else None
+
+    async def get_assignment_details(
+        self, ride_id: UUID
+    ) -> AssignmentDetails | None:
+        row = (
+            await self._session.execute(
+                select(
+                    Driver.name,
+                    Vehicle.vehicle_type_code,
+                    Vehicle.model_name,
+                    Vehicle.registration_number,
+                    RideAssignment.eta_minutes,
+                )
+                .join(Vehicle, Vehicle.driver_id == Driver.id)
+                .join(RideAssignment, RideAssignment.vehicle_id == Vehicle.id)
+                .where(
+                    RideAssignment.ride_id == ride_id,
+                    RideAssignment.released_at.is_(None),
+                )
+            )
+        ).one_or_none()
+        return AssignmentDetails(*row) if row else None
 
     async def transition_driver(
         self,

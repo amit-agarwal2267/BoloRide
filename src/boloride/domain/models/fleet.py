@@ -36,6 +36,7 @@ class DemoFleetMember:
     city: str
     state: str
     vehicle_type_code: str
+    vehicle_model: str
     registration_number: str
 
 
@@ -71,6 +72,46 @@ VEHICLE_COUNTS = {
     "premium": 10,
 }
 
+VEHICLE_MODEL_FAMILIES = {
+    "auto": (
+        "Bajaj Ape Auto Rickshaw",
+        "Bajaj EV Auto Rickshaw",
+        "Bajaj RE",
+        "TVS King",
+        "Mahindra Treo",
+    ),
+    "mini": (
+        "Maruti Suzuki Wagon R",
+        "Maruti Suzuki Swift",
+        "Maruti Suzuki Baleno",
+        "Maruti Suzuki Celerio",
+        "Tata Tiago",
+        "Hyundai Grand i10",
+    ),
+    "sedan": (
+        "Maruti Suzuki Dzire",
+        "Hyundai Aura",
+        "Hyundai Xcent",
+        "Honda Amaze",
+        "Tata Tigor",
+        "Toyota Etios",
+    ),
+    "suv": (
+        "Maruti Suzuki Ertiga",
+        "Mahindra Marazzo",
+        "Toyota Innova",
+        "Toyota Innova Crysta",
+        "Mahindra Scorpio",
+    ),
+    "premium": (
+        "Honda City",
+        "Skoda Slavia",
+        "Volkswagen Virtus",
+        "Toyota Camry",
+        "Toyota Corolla",
+    ),
+}
+
 _FIRST_NAMES = (
     "Aarav", "Aditya", "Aman", "Arjun", "Deepak", "Dev", "Harish", "Ishaan",
     "Kabir", "Karan", "Manish", "Mohan", "Naveen", "Nikhil", "Pranav", "Rahul",
@@ -87,7 +128,7 @@ def generate_demo_fleet() -> tuple[DemoFleetMember, ...]:
     members: list[DemoFleetMember] = []
     ordinal = 0
     for vehicle_type_code, count in VEHICLE_COUNTS.items():
-        for _ in range(count):
+        for category_ordinal in range(count):
             centre = CITY_CENTRES[ordinal % len(CITY_CENTRES)]
             seed_key = f"{FLEET_SEED_VERSION}:{ordinal:04d}"
             # A deterministic grid within roughly 1.5 km of each city centre.
@@ -112,6 +153,10 @@ def generate_demo_fleet() -> tuple[DemoFleetMember, ...]:
                     city=centre.city,
                     state=centre.state,
                     vehicle_type_code=vehicle_type_code,
+                    vehicle_model=VEHICLE_MODEL_FAMILIES[vehicle_type_code][
+                        category_ordinal
+                        % len(VEHICLE_MODEL_FAMILIES[vehicle_type_code])
+                    ],
                     registration_number=registration,
                 )
             )

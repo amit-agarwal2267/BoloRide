@@ -36,13 +36,15 @@ from boloride.domain.models.location import (
     TollStatus,
 )
 from boloride.domain.models.persona import AgentPersona, PersonaGender
+from boloride.integrations.rideprovider.base import RideBookingResult
 from boloride.domain.models.scheduling import RideTimingIntent
 from boloride.domain.models.vehicle import VehicleTypeDetails
 from boloride.domain.policies import CustomerIdentityState
 from boloride.services.time_resolution_service import TimeResolutionService
+from boloride.services.notification_service import NotificationService
 from boloride.services.vehicle_service import VehicleService
 from boloride.prompts.client import PromptFetchResult, PromptFetchStatus
-from boloride.prompts.registry import PromptKey, PromptRegistry
+from boloride.prompts.registry import PromptBundle, PromptRegistry
 
 
 class NullTracer:
@@ -96,18 +98,37 @@ class VehicleCatalog:
         ]
 
 
+def fallback_prompt_bundle() -> PromptBundle:
+    client = SimpleNamespace(
+        fetch_text_prompt=lambda name, label: PromptFetchResult(
+            PromptFetchStatus.NOT_CONFIGURED
+        )
+    )
+
+    return PromptRegistry(
+        client,
+        label="development",
+    ).get_bundle()
+
+
 def make_agent(
-    base_prompt: str = "You are BoloRide.",
+    prompt_bundle: PromptBundle | None = None,
     persona: AgentPersona | None = None,
+    notifications: NotificationService | None = None,
 ) -> tuple[BoloRideAgent, RideContext, AsyncMock]:
     user_id = uuid4()
+
     context = RideContext(
         session_id="voice-test",
         caller_id=user_id,
-        identity_state=CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,
+        identity_state=(
+            CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER
+        ),
         verified_customer_id=user_id,
     )
+
     database_session = AsyncMock()
+
     locations = SimpleNamespace(
         resolve_query=AsyncMock(),
         search_locations=AsyncMock(
@@ -131,19 +152,39 @@ def make_agent(
             ]
         ),
         resolve_candidate=AsyncMock(
-            side_effect=lambda candidate: candidate.to_resolved_location()
+            side_effect=(
+                lambda candidate:
+                candidate.to_resolved_location()
+            )
         ),
     )
+
     agent = BoloRideAgent(
-        base_prompt=base_prompt,
+        prompt_bundle=(
+            prompt_bundle
+            or fallback_prompt_bundle()
+        ),
         context=context,
         user_id=user_id,
         database_session=database_session,
         locations=locations,
-        saved_places=SimpleNamespace(list_places=AsyncMock(return_value=[]), resolve_label=AsyncMock(return_value=None)),
-        rides=SimpleNamespace(list_for_customer=AsyncMock(return_value=[])),
+        saved_places=SimpleNamespace(
+            list_places=AsyncMock(
+                return_value=[]
+            ),
+            resolve_label=AsyncMock(
+                return_value=None
+            ),
+        ),
+        rides=SimpleNamespace(
+            list_for_customer=AsyncMock(
+                return_value=[]
+            )
+        ),
         ride_service=SimpleNamespace(
-            get_customer_ride_status=AsyncMock(return_value=None),
+            get_customer_ride_status=AsyncMock(
+                return_value=None
+            ),
             resolve_customer_ride_reference=AsyncMock(
                 return_value=RideReferenceResolution(
                     RideReferenceResolutionStatus.NOT_FOUND
@@ -151,33 +192,100 @@ def make_agent(
             ),
             cancel_customer_ride=AsyncMock(),
         ),
-        dispatch=SimpleNamespace(dispatch=AsyncMock()),
+        dispatch=SimpleNamespace(
+            dispatch=AsyncMock()
+        ),
         booking=ConfirmationGuard(),
         quotes=SimpleNamespace(
-            confirm_quote=lambda context, quote_id: context.confirm_quote(quote_id),
+            confirm_quote=(
+                lambda context, quote_id:
+                context.confirm_quote(quote_id)
+            ),
             create_quote=AsyncMock(),
             preview_vehicle_prices=AsyncMock(),
         ),
-        offers=SimpleNamespace(get_eligible_offers=AsyncMock(return_value=[])),
-        vehicles=VehicleService(VehicleCatalog()),  # type: ignore[arg-type]
+        offers=SimpleNamespace(
+            get_eligible_offers=AsyncMock(
+                return_value=[]
+            )
+        ),
+        vehicles=VehicleService(
+            VehicleCatalog()
+        ),  # type: ignore[arg-type]
         tracer=NullTracer(),  # type: ignore[arg-type]
         default_country="IN",
         timezone="Asia/Kolkata",
-        time_resolution=TimeResolutionService(lambda: datetime(2026, 9, 6, 12, tzinfo=UTC)),
-        persona=persona
-        or AgentPersona(
-            "staff-aditi", "Aditi", PersonaGender.FEMALE, "hi-IN-SwaraNeural"
+        time_resolution=TimeResolutionService(
+            lambda: datetime(
+                2026,
+                9,
+                6,
+                12,
+                tzinfo=UTC,
+            )
         ),
+        persona=(
+            persona
+            or AgentPersona(
+                "staff-aditi",
+                "Aditi",
+                PersonaGender.FEMALE,
+                "hi-IN-SwaraNeural",
+            )
+        ),
+        notifications=notifications,
     )
+
     return agent, context, database_session
 
 
 def test_agent_construction_uses_fallback_when_langfuse_is_unavailable() -> None:
-    client = SimpleNamespace(fetch_text_prompt=lambda name, label: PromptFetchResult(PromptFetchStatus.NOT_CONFIGURED))
-    prompt = PromptRegistry(client, label="development").get(PromptKey.VOICE_AGENT)
-    agent, _, _ = make_agent(prompt.content)
-    assert prompt.source == "fallback"
+    bundle = fallback_prompt_bundle()
+
+    agent, _, _ = make_agent(
+        prompt_bundle=bundle
+    )
+
+    assert bundle.source == "fallback"
+
+    assert (
+        bundle.voice_agent.source
+        == "fallback"
+    )
+    assert (
+        bundle.location_clarification.source
+        == "fallback"
+    )
+    assert (
+        bundle.booking_confirmation.source
+        == "fallback"
+    )
+    assert (
+        bundle.error_recovery.source
+        == "fallback"
+    )
+    assert (
+        bundle.offer_explanation.source
+        == "fallback"
+    )
+
     assert "BoloRide" in agent.instructions
+    assert (
+        "Location clarification policy:"
+        in agent.instructions
+    )
+    assert (
+        "Booking confirmation policy:"
+        in agent.instructions
+    )
+    assert (
+        "Error recovery policy:"
+        in agent.instructions
+    )
+    assert (
+        "Offer explanation policy:"
+        in agent.instructions
+    )
 
 
 @pytest.mark.asyncio
@@ -234,10 +342,10 @@ async def test_booking_reconciliation_pending_is_customer_safe() -> None:
     response = await agent.create_booking()
 
     lowered = response.casefold()
-    assert "provider ne booking request accept ki hai" in lowered
+    assert "provider ने booking request accept की है" in lowered
     assert "final status" in lowered
-    assert "duplicate booking nahi" in lowered
-    assert "cab book ho gayi" not in lowered
+    assert "duplicate booking नहीं" in lowered
+    assert "cab book हो गई" not in lowered
     assert "driver" not in lowered
 
 
@@ -251,7 +359,7 @@ async def test_status_check_returns_bounded_pending_reconciliation_message() -> 
     response = await agent.get_ride_status()
 
     lowered = response.casefold()
-    assert "provider ne booking request accept ki hai" in lowered
+    assert "provider ने booking request accept की है" in lowered
     assert "final status" in lowered
     assert "driver" not in lowered
     agent._ride_service.resolve_customer_ride_reference.assert_not_awaited()
@@ -463,6 +571,59 @@ async def test_quote_tool_returns_structured_missing_state_then_creates_quote() 
 
     assert "Estimated fare: INR 123" in result
     agent._quotes.create_quote.assert_awaited_once_with(context)
+
+
+@pytest.mark.asyncio
+async def test_broad_pickup_is_resolved_but_not_quoteable() -> None:
+    agent, context, _ = make_agent()
+    agent._set_location(
+        "pickup",
+        ResolvedLocation(
+            "Rajendra Nagar, Indore", Decimal("22.7"), Decimal("75.8"),
+            place_types=("sublocality", "political"),
+        ),
+    )
+    context.update_destination(ResolvedLocation("Indore Junction", Decimal("22.72"), Decimal("75.86")))
+    context.update_ride_time(datetime.now(UTC))
+    await agent.select_vehicle_category("auto", 2)
+
+    result = json.loads(await agent.create_fare_quote())
+
+    assert result["status"] == "quote_prerequisites_missing"
+    assert result["missing"] == ["precise_pickup"]
+    agent._quotes.create_quote.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_precise_landmark_pickup_allows_quote_orchestration() -> None:
+    agent, context, _ = make_agent()
+    agent._set_location(
+        "pickup",
+        ResolvedLocation(
+            "Annapurna Mandir, Indore", Decimal("22.7"), Decimal("75.8"),
+            place_types=("hindu_temple", "point_of_interest", "establishment"),
+        ),
+    )
+    context.update_destination(ResolvedLocation("Indore Junction", Decimal("22.72"), Decimal("75.86")))
+    context.update_ride_time(datetime.now(UTC))
+    await agent.select_vehicle_category("auto", 2)
+    agent._quotes.create_quote.return_value = SimpleNamespace(
+        pricing=SimpleNamespace(currency="INR", estimated_total=Decimal("100"), toll_status=TollStatus.NO_TOLL, route_provider="ola", route_distance_meters=1000, vehicle_type_code="auto", components=())
+    )
+    assert "Estimated fare" in await agent.create_fare_quote()
+
+
+@pytest.mark.asyncio
+async def test_prebooking_rejection_never_enters_persisted_cancellation() -> None:
+    agent, context, _ = make_agent()
+    context.current_quote = SimpleNamespace(
+        pricing=SimpleNamespace(estimated_total=Decimal("300"))
+    )
+    context.user_confirmed = True
+    result = json.loads(await agent.reject_unconfirmed_booking("pickup"))
+    assert result == {"status": "booking_change_requested", "field": "pickup", "preserve_other_fields": True}
+    assert context.user_confirmed is False
+    agent._ride_service.cancel_customer_ride.assert_not_awaited()
 
 
 def test_vehicle_and_offer_tool_contracts_are_semantically_distinct() -> None:
@@ -757,20 +918,83 @@ async def test_repeated_location_failure_escalates_to_landmark_without_provider_
 
 def test_conversation_contract_is_short_turn_language_and_confirmation_aware() -> None:
     agent, _, _ = make_agent()
-    instructions = agent.instructions
 
-    assert "ask only which city" in instructions
-    assert "Never ask again for a known city" in instructions
-    assert "one concise complete summary" in instructions
-    assert "pickup, destination, scheduled time, vehicle" in instructions
-    assert "Mirror the caller's Hindi, Hinglish, or English" in instructions
-    assert "Never change or reintroduce your name" in instructions
-    assert "Missing ride time is not permission" in instructions
-    assert "optional nearby-landmark" in instructions
-    assert "response will be spoken" in instructions
-    assert "avoid Markdown" in instructions
-    assert "bypass identity or confirmation" in instructions
+    # Prompt files are multiline documents. Normalize formatting whitespace so
+    # this test validates the semantic contract rather than Markdown wrapping.
+    instructions = " ".join(agent.instructions.split())
 
+    # Main managed voice prompt.
+    assert (
+        "one or two short spoken sentences"
+        in instructions
+    )
+    assert (
+        "Do not use Markdown"
+        in instructions
+    )
+    assert (
+        "Match the caller's Hindi, Hinglish, or English"
+        in instructions
+    )
+    assert (
+        "ask only for information that is still needed"
+        in instructions
+    )
+
+    # Location clarification managed prompt.
+    assert (
+        "ask only which city the ride starts in"
+        in instructions
+    )
+    assert (
+        "Never assume a default city or state"
+        in instructions
+    )
+    assert (
+        "Pickup geography provides context "
+        "but does not constrain the destination"
+        in instructions
+    )
+
+    # Booking confirmation managed prompt.
+    assert (
+        "give one concise spoken summary"
+        in instructions
+    )
+    assert (
+        "current pickup, destination, ride time"
+        in instructions
+    )
+    assert (
+        "Request explicit confirmation "
+        "for this exact current booking/quote"
+        in instructions
+    )
+
+    # Error recovery managed prompt.
+    assert (
+        "Never convert an unknown or uncertain "
+        "operation outcome into success"
+        in instructions
+    )
+
+    # Application-owned deterministic invariants.
+    assert (
+        "Missing ride time never authorizes "
+        "an immediate ride"
+        in instructions
+    )
+    assert (
+        "Never bypass identity, booking confirmation"
+        in instructions
+    )
+
+    # Session-owned persona instruction.
+    assert (
+        "Never change or reintroduce your name, "
+        "gender, or persona"
+        in instructions
+    )
 
 @pytest.mark.asyncio
 async def test_fast_location_operation_skips_progress_acknowledgement() -> None:
@@ -824,9 +1048,7 @@ async def test_slow_location_operation_uses_one_gender_correct_acknowledgement()
     )
 
     assert result.startswith("Selected pickup")
-    assert run_context.messages == [
-        "Ji, ek moment, main location check kar raha hoon."
-    ]
+    assert run_context.messages == ["जी, एक बार location देख लेता हूँ।"]
 
 
 def test_livekit_tool_schema_keeps_run_context_internal() -> None:
@@ -1272,6 +1494,109 @@ async def test_active_ride_booking_result_is_customer_safe() -> None:
     assert "already booked" in output
     assert "Kota Junction" in output
     assert "uuid" not in output.casefold()
+
+
+@pytest.mark.asyncio
+async def test_successful_booking_emits_one_complete_demo_notification() -> None:
+    delivered = []
+
+    class Provider:
+        async def deliver(self, notification):
+            delivered.append(notification)
+
+    agent, _, _ = make_agent(notifications=NotificationService(Provider()))
+    ride_id = uuid4()
+    ride = SimpleNamespace(
+        id=ride_id,
+        pickup_display_name="Home",
+        pickup_address="Home address",
+        destination_display_name="Kota Junction",
+        destination_address="Station address",
+    )
+    accepted_quote = SimpleNamespace(
+        pricing=SimpleNamespace(currency="INR", estimated_total=Decimal("245.00"))
+    )
+    agent._booking = SimpleNamespace(
+        book_ride=AsyncMock(
+            return_value=BookingOutcome(
+                BookingResultStatus.SUCCESS,
+                ride=ride,
+                provider_result=RideBookingResult(
+                    "mock", "provider-1", "Ravi", "White Sedan",
+                    "RJ 20 AB 1234", 5,
+                ),
+                accepted_quote=accepted_quote,
+            )
+        )
+    )
+
+    await agent.create_booking()
+
+    assert len(delivered) == 1
+    assert delivered[0].type.value == "ride_booked"
+    assert delivered[0].ride_id == ride_id
+    assert delivered[0].payload == {
+        "source": "Home",
+        "destination": "Kota Junction",
+        "estimated_fare": "INR 245",
+        "driver_name": "Ravi",
+        "vehicle_number": "RJ 20 AB 1234",
+        "eta": "5 min",
+    }
+
+
+@pytest.mark.asyncio
+async def test_failed_or_idempotent_booking_does_not_emit_duplicate_notification() -> None:
+    provider = SimpleNamespace(deliver=AsyncMock())
+    agent, _, _ = make_agent(notifications=NotificationService(provider))
+    agent._booking = SimpleNamespace(
+        book_ride=AsyncMock(
+            return_value=BookingOutcome(BookingResultStatus.DEFINITIVE_FAILURE)
+        )
+    )
+    await agent.create_booking()
+    provider.deliver.assert_not_awaited()
+
+    agent._booking.book_ride.return_value = BookingOutcome(
+        BookingResultStatus.IDEMPOTENT_SUCCESS,
+        provider_result=RideBookingResult("mock", "provider-1", "Ravi", "Sedan"),
+        accepted_quote=SimpleNamespace(
+            pricing=SimpleNamespace(currency="INR", estimated_total=Decimal("245"))
+        ),
+    )
+    await agent.create_booking()
+    provider.deliver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_successful_cancellation_emits_once_but_failed_or_repeat_does_not() -> None:
+    provider = SimpleNamespace(deliver=AsyncMock())
+    agent, context, _ = make_agent(notifications=NotificationService(provider))
+    details = ride_details()
+    context.select_cancellation_target(details.ride_id)
+    context.record_cancellation_confirmation(details.ride_id, True)
+    agent._ride_service.cancel_customer_ride.return_value = CancellationResult(
+        CancellationResultStatus.SUCCESS, details
+    )
+
+    await agent.cancel_selected_ride()
+
+    provider.deliver.assert_awaited_once()
+    notification = provider.deliver.await_args.args[0]
+    assert notification.type.value == "ride_cancelled"
+    assert notification.ride_id == details.ride_id
+    assert set(notification.payload) == {
+        "source", "destination", "booking_time", "cancellation_time"
+    }
+
+    provider.deliver.reset_mock()
+    context.select_cancellation_target(details.ride_id)
+    context.record_cancellation_confirmation(details.ride_id, True)
+    agent._ride_service.cancel_customer_ride.return_value = CancellationResult(
+        CancellationResultStatus.IDEMPOTENT_SUCCESS, details
+    )
+    await agent.cancel_selected_ride()
+    provider.deliver.assert_not_awaited()
 
 
 @pytest.mark.asyncio

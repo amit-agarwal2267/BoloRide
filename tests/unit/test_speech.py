@@ -7,6 +7,7 @@ from boloride.config import Settings
 from boloride.speech.stt.assemblyai import AssemblyAIProvider
 from boloride.speech.stt.base import normalize_speech_event
 from boloride.speech.tts.local_tts import EdgeTTS
+from boloride.speech.tts.sarvam import SarvamTTS
 from boloride.speech.tts.router import TTSRouter
 
 
@@ -18,6 +19,8 @@ def settings(**overrides: object) -> Settings:
         "assemblyai_api_key": "assembly-key",
         "assemblyai_stt_model": "universal-streaming-multilingual",
         "stt_language": "hi",
+        "tts_provider": "sarvam",
+        "sarvam_api_key": "ci-sarvam-placeholder",
     }
     values.update(overrides)
     return Settings(**values)
@@ -53,21 +56,38 @@ def test_transcript_event_is_normalized(event_type, is_final: bool) -> None:
     assert result.confidence == 0.8
 
 
-def test_tts_router_exposes_livekit_compatible_edge_adapter() -> None:
+def test_tts_router_selects_sarvam_by_default() -> None:
     adapter = TTSRouter(settings()).get_provider().get_livekit_tts()
+    assert isinstance(adapter, SarvamTTS)
+    assert adapter.provider == "sarvam"
+    assert adapter.model == "bulbul:v3"
+    assert adapter.sample_rate == 24000
+
+
+def test_sarvam_requires_key_only_when_selected() -> None:
+    with pytest.raises(ValueError, match="SARVAM_API_KEY"):
+        TTSRouter(settings(sarvam_api_key=None))
+    assert isinstance(
+        TTSRouter(settings(tts_provider="edge", sarvam_api_key=None)).get_provider().get_livekit_tts(),
+        EdgeTTS,
+    )
+
+
+def test_tts_router_exposes_livekit_compatible_edge_adapter() -> None:
+    adapter = TTSRouter(settings(tts_provider="edge")).get_provider().get_livekit_tts()
     assert isinstance(adapter, EdgeTTS)
     assert adapter.provider == "edge"
     assert adapter.sample_rate == 24000
 
 
 def test_tts_router_uses_session_persona_voice_override() -> None:
-    adapter = TTSRouter(settings(), voice="hi-IN-MadhurNeural").get_provider().get_livekit_tts()
+    adapter = TTSRouter(settings(tts_provider="edge"), voice="hi-IN-MadhurNeural").get_provider().get_livekit_tts()
     assert adapter.model == "hi-IN-MadhurNeural"
 
 
 @pytest.mark.asyncio
 async def test_edge_tts_normalizes_only_the_synthesized_copy() -> None:
-    adapter = TTSRouter(settings()).get_provider().get_livekit_tts()
+    adapter = TTSRouter(settings(tts_provider="edge")).get_provider().get_livekit_tts()
     source = "Fare ₹245, vehicle RJ20AB1234"
 
     stream = adapter.synthesize(source)

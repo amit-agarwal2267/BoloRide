@@ -37,6 +37,7 @@ class RideStatusDetails:
     driver_display_name: str | None = None
     vehicle_registration: str | None = None
     vehicle_display_name: str | None = None
+    eta_minutes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

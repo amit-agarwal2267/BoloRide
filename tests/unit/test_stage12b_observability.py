@@ -229,10 +229,21 @@ async def test_edge_tts_records_full_synthesis_without_text(monkeypatch) -> None
             return None
 
         def decode(self, **_):
-            return []
+            return [Frame()]
+
+    class Frame:
+        def to_ndarray(self):
+            return SimpleNamespace(tobytes=lambda: b"\x00\x00")
+
+    class Resampler:
+        def resample(self, frame):
+            return [frame]
 
     class Emitter:
         def initialize(self, **_):
+            return None
+
+        def push(self, _):
             return None
 
     monkeypatch.setattr(
@@ -240,6 +251,9 @@ async def test_edge_tts_records_full_synthesis_without_text(monkeypatch) -> None
         lambda *_: Communication(),
     )
     monkeypatch.setattr("boloride.speech.tts.local_tts.av.open", lambda *_: Container())
+    monkeypatch.setattr(
+        "boloride.speech.tts.local_tts.av.AudioResampler", lambda **_: Resampler()
+    )
     stream = object.__new__(EdgeChunkedStream)
     stream._input_text = "private synthesized text"
     stream._voice = "hi-IN-test"

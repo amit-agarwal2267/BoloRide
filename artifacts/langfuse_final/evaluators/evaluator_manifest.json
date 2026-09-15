@@ -1,0 +1,23 @@
+{
+  "langfuse_evaluators": [
+    {
+      "name": "voice_response_quality",
+      "implementation": "LLMVoiceJudge",
+      "type": "llm_judge",
+      "score_type": "BOOLEAN",
+      "min": 0,
+      "max": 1,
+      "definition": "voice_response_quality.md"
+    }
+  ],
+  "keep_local": [
+    "score_policy",
+    "score_action",
+    "score_voice_deterministically",
+    "classify_failure",
+    "tool_call_and_argument_checks",
+    "ride_context_state_checks",
+    "quote_and_confirmation_invalidation_checks",
+    "booking_cancellation_and_provider_result_checks"
+  ]
+}

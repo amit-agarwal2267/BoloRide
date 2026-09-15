@@ -50,7 +50,7 @@ async def test_three_consecutive_silences_recover_then_end_session():
     await lifecycle.handle_silence()
 
     assert len(session.spoken) == 3
-    assert "sun rahi" in session.spoken[0][0]
+    assert "सुन रही हूँ" in session.spoken[0][0]
     assert context.session_active is False
     session.shutdown.assert_called_once_with(drain=True)
 

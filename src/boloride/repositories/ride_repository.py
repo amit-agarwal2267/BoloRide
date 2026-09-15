@@ -155,7 +155,12 @@ class RideRepository:
         if ride.status in {RideStatus.ASSIGNED, RideStatus.ON_TRIP}:
             assignment_details = (
                 await self._session.execute(
-                    select(Driver.name, Vehicle.registration_number, VehicleType.display_name)
+                    select(
+                        Driver.name,
+                        Vehicle.registration_number,
+                        Vehicle.model_name,
+                        RideAssignment.eta_minutes,
+                    )
                     .join(Vehicle, Vehicle.driver_id == Driver.id)
                     .join(VehicleType, VehicleType.code == Vehicle.vehicle_type_code)
                     .join(RideAssignment, RideAssignment.vehicle_id == Vehicle.id)
@@ -178,6 +183,7 @@ class RideRepository:
             driver_display_name=assignment_details[0] if assignment_details else None,
             vehicle_registration=assignment_details[1] if assignment_details else None,
             vehicle_display_name=assignment_details[2] if assignment_details else None,
+            eta_minutes=assignment_details[3] if assignment_details else None,
         )
 
     async def get_active_status_for_customer(

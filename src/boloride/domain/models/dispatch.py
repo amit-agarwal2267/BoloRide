@@ -16,9 +16,19 @@ class DispatchResultStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class AssignmentDetails:
+    driver_name: str
+    vehicle_type_code: str
+    vehicle_model: str
+    vehicle_registration: str
+    eta_minutes: int
+
+
+@dataclass(frozen=True, slots=True)
 class DispatchResult:
     status: DispatchResultStatus
     ride_id: UUID | None = None
+    assignment: AssignmentDetails | None = None
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -47,6 +47,26 @@ class RouteSanityStatus(StrEnum):
     FAILED = "failed"
 
 
+_PRECISE_PICKUP_TYPES = frozenset({
+    "airport", "bus_station", "establishment", "hospital", "hotel", "lodging",
+    "point_of_interest", "premise", "subpremise", "train_station", "transit_station",
+    "street_address", "saved_place",
+})
+_BROAD_PICKUP_TYPES = frozenset({
+    "administrative_area_level_1", "administrative_area_level_2", "country",
+    "locality", "neighborhood", "political", "postal_code", "route", "sublocality",
+    "sublocality_level_1",
+})
+
+
+def is_pickup_precise(location: "ResolvedLocation") -> bool:
+    """Fail closed unless provider-backed types identify a findable pickup point."""
+    types = frozenset(location.place_types or ())
+    if not types or types.issubset(_BROAD_PICKUP_TYPES):
+        return False
+    return bool(types.intersection(_PRECISE_PICKUP_TYPES))
+
+
 _AIRPORT_PLACE_TYPES = frozenset({"airport", "international_airport"})
 
 

@@ -31,6 +31,14 @@ class FleetSeedService:
             )
             if driver_count or vehicle_count:
                 counts = await self._fleet.category_counts(FLEET_SEED_VERSION)
+                if (
+                    driver_count == expected_total
+                    and vehicle_count == expected_total
+                    and counts == VEHICLE_COUNTS
+                ):
+                    # Migration 017 gives legacy demo rows safe non-null values;
+                    # reconcile them to the exact deterministic catalogue here.
+                    await self._fleet.update_seed_models(members)
                 actual_signatures = await self._fleet.seeded_signatures(
                     FLEET_SEED_VERSION
                 )
@@ -46,6 +54,7 @@ class FleetSeedService:
                         member.city,
                         member.state,
                         member.vehicle_type_code,
+                        member.vehicle_model,
                         member.registration_number,
                         True,
                     )
@@ -70,6 +79,7 @@ class FleetSeedService:
                         "category_counts": counts,
                     },
                 )
+                await self._session.commit()
                 return counts
 
             await self._fleet.insert_seed(members, FLEET_SEED_VERSION)

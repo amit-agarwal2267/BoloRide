@@ -1,9 +1,14 @@
 from dataclasses import FrozenInstanceError
+from typing import cast
 
 import pytest
 
 from boloride.domain.models.persona import AgentPersona, PersonaGender
-from boloride.services.persona_service import PersonaSelector, build_staff_personas
+from boloride.services.persona_service import (
+    SARVAM_VOICE_CATALOG,
+    PersonaSelector,
+    build_staff_personas,
+)
 
 
 MALE = AgentPersona(
@@ -14,36 +19,33 @@ FEMALE = AgentPersona(
 )
 
 
-def test_fixed_staff_catalog_has_ten_unique_gender_correct_personas():
+def test_approved_sarvam_catalog_and_selected_runtime_personas():
     personas = build_staff_personas(
         "hi-IN-MadhurNeural", "hi-IN-SwaraNeural"
     )
 
-    assert len(personas) == 10
-    assert len({persona.persona_id for persona in personas}) == 10
-    assert [persona.display_name for persona in personas] == [
-        "Aarav",
-        "Arjun",
-        "Kabir",
-        "Rohan",
-        "Vivaan",
-        "Aditi",
-        "Ananya",
-        "Kavya",
-        "Meera",
-        "Riya",
-    ]
+    assert len(SARVAM_VOICE_CATALOG) == 28
+    assert len({voice.speaker for voice in SARVAM_VOICE_CATALOG}) == 28
+    assert len(personas) == 2
+    assert [persona.display_name for persona in personas] == ["Amit", "Ritu"]
     males = [persona for persona in personas if persona.gender is PersonaGender.MALE]
     females = [
         persona for persona in personas if persona.gender is PersonaGender.FEMALE
     ]
-    assert len(males) == len(females) == 5
+    assert len(males) == len(females) == 1
     assert {persona.edge_tts_voice for persona in males} == {
         "hi-IN-MadhurNeural"
     }
     assert {persona.edge_tts_voice for persona in females} == {
         "hi-IN-SwaraNeural"
     }
+    assert males[0].tts_speaker == "amit"
+    assert females[0].tts_speaker == "ritu"
+
+
+def test_persona_speaker_gender_is_validated() -> None:
+    with pytest.raises(ValueError, match="unsupported male"):
+        build_staff_personas("male-edge", "female-edge", "ritu", "pooja")
 
 
 def test_selection_is_injectable_and_one_value_is_fixed_by_session_owner():
@@ -66,9 +68,14 @@ def test_independent_selectors_may_choose_different_personas():
 
 
 def test_welcome_and_grammar_match_gender_without_policy_personality_changes():
-    assert "Main Aarav bol raha hoon" in MALE.welcome
-    assert "Main Aditi bol rahi hoon" in FEMALE.welcome
-    assert "kis shehar se ride book" in MALE.welcome
+    assert MALE.welcome == (
+        "Hello, मैं Aarav BoloRide से बोल रहा हूँ। "
+        "मैं आपकी किस तरह मदद कर सकता हूँ?"
+    )
+    assert FEMALE.welcome == (
+        "Hello, मैं Aditi BoloRide से बोल रही हूँ। "
+        "मैं आपकी किस तरह मदद कर सकती हूँ?"
+    )
     assert "Aarav" in MALE.grammatical_instruction
     assert "Aditi" in FEMALE.grammatical_instruction
     assert "masculine" in MALE.grammatical_instruction
@@ -76,14 +83,22 @@ def test_welcome_and_grammar_match_gender_without_policy_personality_changes():
     assert "virtual representative" in FEMALE.grammatical_instruction
 
 
+def test_welcome_rejects_unsupported_persona_gender() -> None:
+    persona = AgentPersona(
+        "staff-invalid",
+        "Invalid",
+        cast(PersonaGender, "unsupported"),
+        "voice",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported persona gender"):
+        _ = persona.welcome
+
+
 def test_progress_acknowledgements_match_gender_and_operation():
-    assert "fare check kar raha hoon" in MALE.progress_acknowledgement("quote")
-    assert "location check kar rahi hoon" in FEMALE.progress_acknowledgement(
-        "location"
-    )
-    assert "booking confirm kar rahi hoon" in FEMALE.progress_acknowledgement(
-        "booking"
-    )
+    assert MALE.progress_acknowledgement("quote") == "जी, एक बार fare देख लेता हूँ।"
+    assert FEMALE.progress_acknowledgement("location") == "जी, एक बार location देख लेती हूँ।"
+    assert FEMALE.progress_acknowledgement("booking") == "जी, एक बार booking check कर लेती हूँ।"
 
 
 def test_selected_persona_identity_is_immutable() -> None:

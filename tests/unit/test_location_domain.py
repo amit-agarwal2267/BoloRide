@@ -11,6 +11,7 @@ from boloride.domain.models.location import (
     assess_route_sanity,
     customer_location_label,
     deduplicate_location_candidates,
+    is_pickup_precise,
 )
 
 
@@ -105,3 +106,22 @@ def test_route_sanity_rejects_structured_contradictions_not_distance_alone():
     assert suspicious.reason == "same_locality_route_detour"
     assert normal.status is RouteSanityStatus.PASSED
     assert legitimate_long.status is RouteSanityStatus.PASSED
+
+
+@pytest.mark.parametrize(
+    "place_types",
+    [("street_address",), ("premise",), ("train_station",), ("point_of_interest",)],
+)
+def test_specific_provider_types_are_precise_pickups(place_types) -> None:
+    assert is_pickup_precise(
+        ResolvedLocation("Specific", Decimal("25"), Decimal("75"), place_types=place_types)
+    )
+
+
+@pytest.mark.parametrize(
+    "place_types", [None, ("locality", "political"), ("sublocality",), ("route",)]
+)
+def test_broad_or_missing_provider_types_fail_pickup_precision(place_types) -> None:
+    assert not is_pickup_precise(
+        ResolvedLocation("Broad", Decimal("25"), Decimal("75"), place_types=place_types)
+    )

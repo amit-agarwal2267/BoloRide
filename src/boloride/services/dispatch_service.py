@@ -1,4 +1,5 @@
 import logging
+from math import ceil
 from time import monotonic
 from uuid import UUID
 
@@ -41,8 +42,13 @@ class DispatchService:
         persisted_ride_id = ride.id
         vehicle_category = quote.vehicle_type_code
         if ride.status is RideStatus.ASSIGNED:
+            details = await self._assignments.get_assignment_details(ride.id)
             await self._session.rollback()
-            return DispatchResult(DispatchResultStatus.ALREADY_ASSIGNED, persisted_ride_id)
+            return DispatchResult(
+                DispatchResultStatus.ALREADY_ASSIGNED,
+                persisted_ride_id,
+                details,
+            )
         if ride.status is not RideStatus.BOOKED:
             await self._session.rollback()
             return DispatchResult(DispatchResultStatus.INVALID_LIFECYCLE, persisted_ride_id)
@@ -86,13 +92,26 @@ class DispatchService:
                 await self._session.rollback()
                 logger.info("lifecycle_race_lost", extra={"event": "lifecycle_race_lost"})
                 return DispatchResult(DispatchResultStatus.RACE_LOST, persisted_ride_id)
-            await self._assignments.create(ride.id, driver.id, vehicle.id)
+            distance_km = haversine_km(
+                float(ride.pickup_latitude),
+                float(ride.pickup_longitude),
+                float(driver.latitude),
+                float(driver.longitude),
+            )
+            eta_minutes = max(3, min(20, ceil(distance_km * 3)))
+            await self._assignments.create(
+                ride.id, driver.id, vehicle.id, eta_minutes
+            )
             await self._session.commit()
             logger.info(
                 "dispatch_assignment_success",
                 extra={"event": "dispatch_assignment_success", "vehicle_category": vehicle_category, "duration_ms": round((monotonic() - started) * 1000, 2)},
             )
-            return DispatchResult(DispatchResultStatus.ASSIGNED, persisted_ride_id)
+            return DispatchResult(
+                DispatchResultStatus.ASSIGNED,
+                persisted_ride_id,
+                await self._assignments.get_assignment_details(ride.id),
+            )
 
         await self._session.rollback()
         logger.info("dispatch_no_driver_available", extra={"event": "dispatch_no_driver_available", "vehicle_category": vehicle_category})

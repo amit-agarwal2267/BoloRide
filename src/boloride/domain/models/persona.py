@@ -13,15 +13,23 @@ class AgentPersona:
     display_name: str
     gender: PersonaGender
     edge_tts_voice: str
+    tts_speaker: str | None = None
+    spoken_name: str | None = None
 
     @property
     def welcome(self) -> str:
-        speech = "bol raha" if self.gender is PersonaGender.MALE else "bol rahi"
-        return (
-            "Namaste, BoloRide mein aapka swagat hai. "
-            f"Main {self.display_name} {speech} hoon. "
-            "Aap kis shehar se ride book karna chahte hain?"
-        )
+        name = self.spoken_name or self.display_name
+        if self.gender is PersonaGender.MALE:
+            return (
+                f"नमस्ते, मैं BoloRide से {name} हूँ। "
+                "मैं आपकी किस तरह मदद कर सकता हूँ?"
+            )
+        if self.gender is PersonaGender.FEMALE:
+            return (
+                f"नमस्ते, मैं BoloRide से {name} हूँ। "
+                "मैं आपकी किस तरह मदद कर सकती हूँ?"
+            )
+        raise ValueError(f"Unsupported persona gender: {self.gender!r}")
 
     @property
     def grammatical_instruction(self) -> str:
@@ -36,10 +44,10 @@ class AgentPersona:
         )
 
     def progress_acknowledgement(self, operation: str) -> str:
-        verb = "raha" if self.gender is PersonaGender.MALE else "rahi"
+        ending = "लेता हूँ" if self.gender is PersonaGender.MALE else "लेती हूँ"
         action = {
-            "location": "location check",
-            "quote": "fare check",
-            "booking": "booking confirm",
-        }.get(operation, "check")
-        return f"Ji, ek moment, main {action} kar {verb} hoon."
+            "location": "location देख",
+            "quote": "fare देख",
+            "booking": "booking check कर",
+        }.get(operation, "देख")
+        return f"जी, एक बार {action} {ending}।"

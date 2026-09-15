@@ -1,0 +1,49 @@
+services:
+  web-demo:
+    profiles: ["local-web"]
+
+  boloride:
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+      LOG_LEVEL: ERROR
+    ports: !override
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8000}:8000"
+    volumes: !reset []
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+    command:
+      - uv
+      - run
+      - uvicorn
+      - boloride.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --log-level
+      - error
+      - --no-access-log
+
+  voice-agent:
+    profiles: ["voice"]
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+      LOG_LEVEL: ERROR
+      LIVEKIT_LOG_LEVEL: error
+    volumes: !reset []
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+    command:
+      - uv
+      - run
+      - python
+      - -m
+      - boloride.integrations.telephony.livekit
+      - start
+
+  livekit-server:
+    profiles: ["local-livekit"]

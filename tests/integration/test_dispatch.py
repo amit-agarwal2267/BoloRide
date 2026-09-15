@@ -45,6 +45,7 @@ async def add_candidate(
     )
     vehicle = Vehicle(
         id=uuid4(), driver_id=driver.id, vehicle_type_code=vehicle_type,
+        model_name=f"{vehicle_type.title()} Test Vehicle",
         registration_number=(
             f"RJ{10 + token % 90:02d}"
             f"{chr(65 + token // 90 % 26)}{chr(65 + token // 2340 % 26)}"

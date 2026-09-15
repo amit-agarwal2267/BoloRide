@@ -14,6 +14,26 @@ from boloride.observability.tracing import get_observability_context
 logger = logging.getLogger(__name__)
 
 
+async def synthesize_edge_pcm(text: str, voice: str) -> bytes:
+    """Synthesize one complete Edge utterance as 24 kHz mono signed PCM."""
+    audio = bytearray()
+    async for chunk in edge_tts.Communicate(text, voice).stream():
+        if chunk["type"] == "audio":
+            audio.extend(chunk["data"])
+    if not audio:
+        raise APIConnectionError("Edge TTS returned no audio")
+
+    pcm = bytearray()
+    with av.open(BytesIO(audio)) as container:
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=24000)
+        for frame in container.decode(audio=0):
+            for converted in resampler.resample(frame):
+                pcm.extend(converted.to_ndarray().tobytes())
+    if not pcm:
+        raise APIConnectionError("Edge TTS returned no decodable audio")
+    return bytes(pcm)
+
+
 class EdgeTTS(tts.TTS):
     def __init__(self, voice: str) -> None:
         super().__init__(capabilities=tts.TTSCapabilities(streaming=False), sample_rate=24000, num_channels=1)
@@ -58,18 +78,9 @@ class EdgeChunkedStream(tts.ChunkedStream):
         observation = manager.__enter__() if manager is not None else None
         started_at = monotonic()
         try:
-            audio = bytearray()
-            async for chunk in edge_tts.Communicate(self.input_text, self._voice).stream():
-                if chunk["type"] == "audio":
-                    audio.extend(chunk["data"])
-            if not audio:
-                raise APIConnectionError("Edge TTS returned no audio")
+            pcm = await synthesize_edge_pcm(self.input_text, self._voice)
             output_emitter.initialize(request_id=utils.shortuuid(), sample_rate=24000, num_channels=1, mime_type="audio/pcm", frame_size_ms=20)
-            with av.open(BytesIO(audio)) as container:
-                resampler = av.AudioResampler(format="s16", layout="mono", rate=24000)
-                for frame in container.decode(audio=0):
-                    for converted in resampler.resample(frame):
-                        output_emitter.push(converted.to_ndarray().tobytes())
+            output_emitter.push(pcm)
         except APIConnectionError:
             if observation is not None:
                 observation.update(metadata={"provider": "edge", "voice_id": self._voice, "success": False, "duration_ms": (monotonic() - started_at) * 1000})

@@ -56,6 +56,9 @@ class JsonFormatter(logging.Formatter):
             "attempt_order",
             "route_role",
             "session_metrics",
+            "persona_name",
+            "persona_gender",
+            "tts_speaker",
         ):
             value = getattr(record, field, None)
             if value is not None:

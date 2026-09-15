@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     livekit_api_secret: SecretStr | None = None
     livekit_agent_name: str = "boloride-dev"
     development_caller_phone: str | None = None
+    telephony_provider: Literal["console", "browser", "twilio", "exotel"] = "console"
+    livekit_sip_trunk_id: str | None = None
+    browser_demo_caller_phone: str | None = None
 
     # STT
     stt_provider: Literal["assemblyai", "groq"] = "assemblyai"
@@ -69,12 +72,18 @@ class Settings(BaseSettings):
     stt_language: str | None = None
 
     # TTS
-    tts_provider: Literal["edge"] = "edge"
+    tts_provider: Literal["sarvam", "edge"] = "sarvam"
     tts_voice: str = "hi-IN-SwaraNeural"
     tts_male_voice: str = "hi-IN-MadhurNeural"
     tts_female_voice: str = "hi-IN-SwaraNeural"
-    local_tts_model: str = "hi-IN-SwaraNeural"
-    local_tts_device: str = "cpu"
+    sarvam_api_key: SecretStr | None = None
+    sarvam_tts_model: Literal["bulbul:v3"] = "bulbul:v3"
+    sarvam_tts_language: str = "hi-IN"
+    sarvam_tts_pace: float = Field(default=1.0, ge=0.5, le=2.0)
+    sarvam_tts_timeout_seconds: float = Field(default=10.0, gt=0, le=30)
+    sarvam_tts_male_speaker: str = "amit"
+    sarvam_tts_female_speaker: str = "ritu"
+    tts_persona: str = "auto"
 
     @field_validator("database_url")
     @classmethod
@@ -90,6 +99,14 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required when Langfuse is enabled"
+            )
+        if self.telephony_provider in {"twilio", "exotel"} and not self.livekit_sip_trunk_id:
+            raise ValueError(
+                "LIVEKIT_SIP_TRUNK_ID is required for SIP telephony providers"
+            )
+        if self.telephony_provider == "browser" and not self.browser_demo_caller_phone:
+            raise ValueError(
+                "BROWSER_DEMO_CALLER_PHONE is required for browser demo mode"
             )
         return self
 

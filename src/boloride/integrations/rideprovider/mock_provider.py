@@ -50,8 +50,6 @@ class MockRideProvider:
         booking = RideBookingResult(
             provider=self.provider_name,
             provider_booking_id=f"mock-{idempotency_key}",
-            driver_name="Amit Kumar",
-            vehicle_description="White Maruti Dzire, RJ 20 AB 1234",
         )
         if status is ProviderCreateStatus.CONFIRMED or booking_created:
             self._bookings[idempotency_key] = booking

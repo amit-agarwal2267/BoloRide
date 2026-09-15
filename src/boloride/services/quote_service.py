@@ -131,6 +131,10 @@ class QuoteService:
     def _require_inputs(context: RideContext):
         if context.pickup is None or context.destination is None:
             raise DomainValidationError("pickup and destination are required for a quote")
+        if context.pickup_precision_sufficient is False:
+            raise DomainValidationError(
+                "pickup requires a precise landmark, building, society, station, or POI"
+            )
         if context.ride_time is None:
             raise DomainValidationError("ride time is required for a quote")
         if context.ride_time.tzinfo is None:

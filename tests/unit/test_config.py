@@ -52,3 +52,38 @@ def test_disabled_langfuse_does_not_require_credentials(
         langfuse_enabled=False,
     )
     assert settings.langfuse_public_key is None
+
+
+def test_telephony_provider_defaults_to_console_and_accepts_twilio() -> None:
+    defaults = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://u:p@postgres/db",
+    )
+    twilio = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://u:p@postgres/db",
+        telephony_provider="twilio",
+        livekit_sip_trunk_id="trunk-1",
+    )
+
+    assert defaults.telephony_provider == "console"
+    assert twilio.telephony_provider == "twilio"
+
+
+@pytest.mark.parametrize("provider", ["twilio", "exotel"])
+def test_sip_provider_requires_trunk_id(provider: str) -> None:
+    with pytest.raises(ValidationError, match="LIVEKIT_SIP_TRUNK_ID"):
+        Settings(
+            _env_file=None,
+            database_url="postgresql+asyncpg://u:p@postgres/db",
+            telephony_provider=provider,
+        )
+
+
+def test_browser_provider_requires_server_owned_demo_phone() -> None:
+    with pytest.raises(ValidationError, match="BROWSER_DEMO_CALLER_PHONE"):
+        Settings(
+            _env_file=None,
+            database_url="postgresql+asyncpg://u:p@postgres/db",
+            telephony_provider="browser",
+        )

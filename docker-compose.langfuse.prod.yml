@@ -1,0 +1,9 @@
+services:
+  langfuse-web:
+    ports: !override
+      - "127.0.0.1:${LANGFUSE_WEB_PORT:-3000}:3000"
+    environment:
+      NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:?Set LANGFUSE_PUBLIC_URL to the public HTTPS URL}
+
+  langfuse-minio:
+    ports: !reset []

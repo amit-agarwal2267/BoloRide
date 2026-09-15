@@ -4,6 +4,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from boloride.domain.exceptions import DomainValidationError
+from boloride.domain.policies import CustomerIdentityState
+from boloride.services.user_service import UserService
 
 from boloride.domain.models.persona import AgentPersona, PersonaGender
 from boloride.integrations.telephony.livekit import (
@@ -13,6 +16,7 @@ from boloride.integrations.telephony.livekit import (
     _session_stt,
     play_deterministic_welcome,
 )
+from livekit import rtc
 
 
 class Session:
@@ -39,7 +43,8 @@ async def test_welcome_uses_direct_session_say_once_then_enables_listening():
     session.say.assert_called_once_with(persona.welcome, allow_interruptions=False, add_to_chat_ctx=True)
     session.input.set_audio_enabled.assert_called_once_with(True)
     session.generate_reply.assert_not_called()
-    assert "Main Aditi bol rahi hoon" in session.say.call_args.args[0]
+    assert "मैं Aditi BoloRide से बोल रही हूँ" in session.say.call_args.args[0]
+    assert "मदद कर सकती हूँ?" in session.say.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -58,6 +63,101 @@ def test_caller_phone_prefers_adapter_metadata_then_development_fallback():
     ctx.job.metadata = ""
     assert _caller_phone(ctx, "+919999999999") == "+919999999999"
     assert _caller_phone(ctx, None) is None
+
+
+def test_twilio_mode_trusts_only_sip_caller_number() -> None:
+    sip_participant = SimpleNamespace(
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        attributes={
+            "sip.phoneNumber": "+919876543210",
+            "sip.trunkPhoneNumber": "+911234567890",
+            "phone_number": "+919999999999",
+        },
+    )
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata='{"phone_number":"+918888888888"}'),
+        room=SimpleNamespace(remote_participants={"sip": sip_participant}),
+    )
+
+    assert _caller_phone(ctx, "+917777777777", "twilio", "trunk-1") is None
+    sip_participant.attributes["sip.trunkID"] = "trunk-1"
+    assert _caller_phone(ctx, "+917777777777", "twilio", "trunk-1") == "+919876543210"
+
+
+def test_twilio_mode_rejects_untrusted_or_missing_caller_metadata() -> None:
+    standard = SimpleNamespace(
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+        attributes={"sip.phoneNumber": "+919876543210"},
+    )
+    sip_without_caller = SimpleNamespace(
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        attributes={"sip.trunkPhoneNumber": "+911234567890"},
+    )
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata='{"caller_phone":"+918888888888"}'),
+        room=SimpleNamespace(
+            remote_participants={"standard": standard, "sip": sip_without_caller}
+        ),
+    )
+
+    assert _caller_phone(ctx, "+917777777777", "twilio", "trunk-1") is None
+
+
+@pytest.mark.asyncio
+async def test_twilio_caller_reaches_existing_identity_normalization() -> None:
+    sip_participant = SimpleNamespace(
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        attributes={"sip.phoneNumber": "98765 43210", "sip.trunkID": "trunk-1"},
+    )
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata=""),
+        room=SimpleNamespace(remote_participants={"sip": sip_participant}),
+    )
+
+    detected = _caller_phone(ctx, None, "twilio", "trunk-1")
+    assert detected == "98765 43210"
+    repository = AsyncMock()
+    repository.get_by_phone.return_value = None
+    result = await UserService(repository).begin_identity(detected)
+
+    repository.get_by_phone.assert_awaited_once_with("+919876543210")
+    assert result.state is CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED
+
+    sip_participant.attributes["sip.phoneNumber"] = "not-a-phone"
+    malformed = _caller_phone(ctx, None, "twilio", "trunk-1")
+    with pytest.raises(DomainValidationError, match="invalid Indian mobile number"):
+        await UserService(repository).begin_identity(malformed)
+
+
+def test_twilio_mode_cannot_be_switched_to_text_by_job_metadata() -> None:
+    ctx = SimpleNamespace(job=SimpleNamespace(metadata='{"mode":"text"}'))
+
+    assert _client_input_mode(ctx, "twilio") == "telephony"
+
+
+def test_exotel_reuses_sip_trust_boundary_and_rejects_provider_mismatch() -> None:
+    participant = SimpleNamespace(
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        attributes={"sip.phoneNumber": "+919876543210", "sip.trunkID": "exotel"},
+    )
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata='{"caller_phone":"+918888888888"}'),
+        room=SimpleNamespace(remote_participants={"sip": participant}),
+    )
+
+    assert _caller_phone(ctx, None, "exotel", "exotel") == "+919876543210"
+    assert _caller_phone(ctx, None, "exotel", "twilio") is None
+    assert _client_input_mode(ctx, "exotel") == "telephony"
+
+
+def test_browser_mode_uses_only_server_owned_demo_identity() -> None:
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata='{"caller_phone":"+919999999999"}'),
+        room=SimpleNamespace(remote_participants={}),
+    )
+
+    assert _caller_phone(ctx, "+918888888888", "browser", None, "+917777777777") == "+917777777777"
+    assert _caller_phone(ctx, "+918888888888", "browser") is None
 
 
 class TextSession:

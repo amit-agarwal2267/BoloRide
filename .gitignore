@@ -1,5 +1,8 @@
 # Python bytecode and packaging
 __pycache__/
+web/node_modules/
+web/.next/
+web/*.tsbuildinfo
 *.py[cod]
 *$py.class
 build/

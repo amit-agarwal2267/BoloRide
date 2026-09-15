@@ -15,6 +15,10 @@ class Vehicle(Base):
             "registration_number ~ '^(RJ|UP|MP|PB)[0-9]{2}[A-Z]{2}[0-9]{4}$'",
             name="ck_vehicles_synthetic_registration_format",
         ),
+        CheckConstraint(
+            "model_name !~ '^[[:space:]]*$'",
+            name="ck_vehicles_model_name_nonempty",
+        ),
         UniqueConstraint("id", "driver_id", name="uq_vehicles_id_driver_id"),
         Index("ix_vehicles_vehicle_type_code", "vehicle_type_code"),
     )
@@ -31,6 +35,7 @@ class Vehicle(Base):
     vehicle_type_code: Mapped[str] = mapped_column(
         String(32), ForeignKey("vehicle_types.code", ondelete="RESTRICT"), nullable=False
     )
+    model_name: Mapped[str] = mapped_column(String(120), nullable=False)
     registration_number: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(

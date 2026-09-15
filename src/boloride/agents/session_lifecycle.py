@@ -116,14 +116,14 @@ class SessionLifecycleController:
         )
         if count == 1:
             speech = (
-                "Ji, main sun raha hoon."
+                "जी, मैं सुन रहा हूँ।"
                 if self._persona.gender is PersonaGender.MALE
-                else "Ji, main sun rahi hoon."
+                else "जी, मैं सुन रही हूँ।"
             )
         elif count == 2:
-            speech = "Agar aapko thoda waqt chahiye toh bata dijiye."
+            speech = "अगर आपको थोड़ा समय चाहिए, तो बता दीजिए।"
         else:
-            speech = "Shayad connection mein dikkat hai. Aap dobara call kar sakte hain."
+            speech = "शायद connection में दिक्कत है। आप दोबारा call कर सकते हैं।"
         handle = self._session.say(
             speech, allow_interruptions=count < 3, add_to_chat_ctx=True
         )

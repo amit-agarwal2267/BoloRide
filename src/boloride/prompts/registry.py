@@ -1,6 +1,8 @@
 import logging
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from boloride.prompts.client import (
     PromptClient,
@@ -21,7 +23,10 @@ class PromptKey(StrEnum):
 
 
 _PROMPTS: dict[PromptKey, tuple[str, str]] = {
-    PromptKey.VOICE_AGENT: ("boloride-voice-agent", "voice_agent.md"),
+    PromptKey.VOICE_AGENT: (
+        "boloride-voice-agent",
+        "voice_agent.md",
+    ),
     PromptKey.LOCATION_CLARIFICATION: (
         "boloride-location-clarification",
         "location_clarification.md",
@@ -30,12 +35,44 @@ _PROMPTS: dict[PromptKey, tuple[str, str]] = {
         "boloride-booking-confirmation",
         "booking_confirmation.md",
     ),
-    PromptKey.ERROR_RECOVERY: ("boloride-error-recovery", "error_recovery.md"),
+    PromptKey.ERROR_RECOVERY: (
+        "boloride-error-recovery",
+        "error_recovery.md",
+    ),
     PromptKey.OFFER_EXPLANATION: (
         "boloride-offer-explanation",
         "offer_explanation.md",
     ),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class PromptBundle:
+    voice_agent: ResolvedPrompt
+    location_clarification: ResolvedPrompt
+    booking_confirmation: ResolvedPrompt
+    error_recovery: ResolvedPrompt
+    offer_explanation: ResolvedPrompt
+
+    @property
+    def source(
+        self,
+    ) -> Literal["langfuse", "fallback", "mixed"]:
+        sources = {
+            self.voice_agent.source,
+            self.location_clarification.source,
+            self.booking_confirmation.source,
+            self.error_recovery.source,
+            self.offer_explanation.source,
+        }
+
+        if sources == {"langfuse"}:
+            return "langfuse"
+
+        if sources == {"fallback"}:
+            return "fallback"
+
+        return "mixed"
 
 
 class PromptRegistry:
@@ -50,13 +87,22 @@ class PromptRegistry:
         self._client = client
         self._label = label
         self._fallback_enabled = fallback_enabled
-        self._fallback_directory = fallback_directory or Path(__file__).parent / "fallback"
+        self._fallback_directory = (
+            fallback_directory
+            or Path(__file__).parent / "fallback"
+        )
 
     def get(self, key: PromptKey) -> ResolvedPrompt:
         name, fallback_filename = _PROMPTS[key]
-        fetch = self._client.fetch_text_prompt(name, self._label)
+
+        fetch = self._client.fetch_text_prompt(
+            name,
+            self._label,
+        )
+
         if fetch.status is PromptFetchStatus.AVAILABLE:
             assert fetch.prompt is not None
+
             return ResolvedPrompt(
                 name=name,
                 content=fetch.prompt.content,
@@ -67,19 +113,34 @@ class PromptRegistry:
 
         if not self._fallback_enabled:
             raise PromptUnavailableError(
-                f"prompt '{name}' is unavailable (remote: {fetch.status.value}; fallback: disabled)"
+                f"prompt '{name}' is unavailable "
+                f"(remote: {fetch.status.value}; "
+                "fallback: disabled)"
             )
 
-        fallback_path = self._fallback_directory / fallback_filename
+        fallback_path = (
+            self._fallback_directory
+            / fallback_filename
+        )
+
         try:
-            content = fallback_path.read_text(encoding="utf-8").strip()
+            content = (
+                fallback_path
+                .read_text(encoding="utf-8")
+                .strip()
+            )
         except OSError as exc:
             raise PromptUnavailableError(
-                f"prompt '{name}' is unavailable (remote: {fetch.status.value}; fallback: missing)"
+                f"prompt '{name}' is unavailable "
+                f"(remote: {fetch.status.value}; "
+                "fallback: missing)"
             ) from exc
+
         if not content:
             raise PromptUnavailableError(
-                f"prompt '{name}' is unavailable (remote: {fetch.status.value}; fallback: empty)"
+                f"prompt '{name}' is unavailable "
+                f"(remote: {fetch.status.value}; "
+                "fallback: empty)"
             )
 
         _safe_log(
@@ -92,6 +153,7 @@ class PromptRegistry:
                 "prompt_source": "fallback",
             },
         )
+
         return ResolvedPrompt(
             name=name,
             content=content,
@@ -99,9 +161,39 @@ class PromptRegistry:
             label=self._label,
         )
 
+    def get_bundle(self) -> PromptBundle:
+        return PromptBundle(
+            voice_agent=self.get(
+                PromptKey.VOICE_AGENT
+            ),
+            location_clarification=self.get(
+                PromptKey.LOCATION_CLARIFICATION
+            ),
+            booking_confirmation=self.get(
+                PromptKey.BOOKING_CONFIRMATION
+            ),
+            error_recovery=self.get(
+                PromptKey.ERROR_RECOVERY
+            ),
+            offer_explanation=self.get(
+                PromptKey.OFFER_EXPLANATION
+            ),
+        )
 
-def _safe_log(level: str, message: str, *, extra: dict[str, object]) -> None:
+
+def _safe_log(
+    level: str,
+    message: str,
+    *,
+    extra: dict[str, object],
+) -> None:
     try:
-        getattr(logger, level)(message, extra=extra)
+        getattr(
+            logger,
+            level,
+        )(
+            message,
+            extra=extra,
+        )
     except Exception:
         pass

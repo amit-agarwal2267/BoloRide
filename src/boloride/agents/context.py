@@ -21,6 +21,7 @@ class RideContext:
 	pending_customer_age: int | None = None
 	intent: str | None = None
 	pickup: ResolvedLocation | None = None
+	pickup_precision_sufficient: bool | None = None
 	destination: ResolvedLocation | None = None
 	route: RouteResult | None = None
 	ride_time: datetime | None = None
@@ -114,6 +115,26 @@ class RideContext:
 		self.confirmed_quote_id = quote_id
 		self.user_confirmed = True
 
+	def decline_current_quote(self) -> None:
+		"""Reject booking authorization without cancelling any persisted ride."""
+		self.confirmed_quote_id = None
+		self.user_confirmed = False
+		self.booking_confirmed = False
+
+	def abandon_unconfirmed_request(self) -> None:
+		"""Clear only the in-session request; verified identity remains established."""
+		self.pickup = None
+		self.pickup_precision_sufficient = None
+		self.destination = None
+		self.route = None
+		self.ride_time = None
+		self.timing_intent = None
+		self.pickup_instructions = None
+		self.pickup_instruction_handled = False
+		self.selected_vehicle_type_code = None
+		self.selected_offer = None
+		self._invalidate_quote()
+
 	def disconnect(self) -> None:
 		self.session_active = False
 		self._invalidate_quote()
@@ -177,11 +198,16 @@ class RideContext:
 			and self.cancellation_confirmed_ride_ids == ride_ids
 		)
 
-	def update_pickup(self, pickup: ResolvedLocation | None) -> None:
+	def update_pickup(
+		self, pickup: ResolvedLocation | None, *, precision_sufficient: bool | None = None
+	) -> None:
 		if self.pickup != pickup:
 			self.pickup = pickup
 			self.route = None
 			self._invalidate_quote()
+			self.pickup_precision_sufficient = (
+				precision_sufficient if pickup is not None else None
+			)
 		if pickup is not None:
 			if (
 				pickup.city

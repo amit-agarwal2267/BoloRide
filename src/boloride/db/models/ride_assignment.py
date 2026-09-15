@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, String, func, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +15,10 @@ class RideAssignment(Base):
             "(released_at IS NULL AND release_reason IS NULL) OR "
             "(released_at IS NOT NULL AND release_reason IN ('cancelled', 'completed'))",
             name="ck_ride_assignments_release_pair",
+        ),
+        CheckConstraint(
+            "eta_minutes BETWEEN 1 AND 120",
+            name="ck_ride_assignments_eta_minutes",
         ),
         ForeignKeyConstraint(
             ["vehicle_id", "driver_id"],
@@ -43,6 +47,7 @@ class RideAssignment(Base):
     vehicle_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True), nullable=False
     )
+    eta_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

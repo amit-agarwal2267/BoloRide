@@ -22,8 +22,10 @@ class RideBookingRequest:
 class RideBookingResult:
 	provider: str
 	provider_booking_id: str
-	driver_name: str
-	vehicle_description: str
+	driver_name: str | None = None
+	vehicle_description: str | None = None
+	vehicle_registration: str | None = None
+	eta_minutes: int | None = None
 
 
 class ProviderCreateStatus(StrEnum):

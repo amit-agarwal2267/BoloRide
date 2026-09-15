@@ -39,9 +39,11 @@ class VoiceSessionMetadata:
     tts_provider: str
     prompt_source: str
     environment: str
+    persona_name: str | None = None
+    tts_speaker: str | None = None
 
     def as_dict(self) -> dict[str, str]:
-        return {
+        values = {
             "persona_id": self.persona_id,
             "persona_gender": self.persona_gender,
             "interaction_mode": self.interaction_mode,
@@ -50,7 +52,10 @@ class VoiceSessionMetadata:
             "tts_provider": self.tts_provider,
             "prompt_source": self.prompt_source,
             "environment": self.environment,
+            "persona_name": self.persona_name,
+            "tts_speaker": self.tts_speaker,
         }
+        return {key: value for key, value in values.items() if value is not None}
 
 
 class Observation(Protocol):

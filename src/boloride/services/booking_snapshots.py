@@ -89,14 +89,34 @@ def deserialize_authorization(value: object) -> tuple[RideBookingRequest, Quote]
 
 
 def serialize_provider_result(result: RideBookingResult) -> dict:
-    return {"version": 1, "provider": result.provider, "provider_booking_id": result.provider_booking_id, "driver_name": result.driver_name, "vehicle_description": result.vehicle_description}
+    value = {
+        "version": 1,
+        "provider": result.provider,
+        "provider_booking_id": result.provider_booking_id,
+    }
+    if result.driver_name is not None:
+        value["driver_name"] = result.driver_name
+    if result.vehicle_description is not None:
+        value["vehicle_description"] = result.vehicle_description
+    if result.vehicle_registration is not None:
+        value["vehicle_registration"] = result.vehicle_registration
+    if result.eta_minutes is not None:
+        value["eta_minutes"] = result.eta_minutes
+    return value
 
 
 def deserialize_provider_result(value: object) -> RideBookingResult:
     try:
         if not isinstance(value, dict) or value.get("version") != 1:
             raise ValueError("unsupported provider snapshot version")
-        result = RideBookingResult(value["provider"], value["provider_booking_id"], value["driver_name"], value["vehicle_description"])
+        result = RideBookingResult(
+            value["provider"],
+            value["provider_booking_id"],
+            value.get("driver_name"),
+            value.get("vehicle_description"),
+            value.get("vehicle_registration"),
+            value.get("eta_minutes"),
+        )
         if not result.provider.strip() or not result.provider_booking_id.strip():
             raise ValueError("blank provider identity")
         return result
