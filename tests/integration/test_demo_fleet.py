@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from boloride.db.models.driver import Driver
 from boloride.db.models.vehicle import Vehicle
 from boloride.db.models.vehicle_type import VehicleType
-from boloride.domain.models.fleet import FLEET_SEED_VERSION, VEHICLE_COUNTS
+from boloride.domain.models.fleet import FLEET_SEED_VERSION, VEHICLE_COUNTS, VEHICLE_MODEL_FAMILIES
 from boloride.repositories.fleet_repository import FleetRepository
 from boloride.services.fleet_seed_service import FleetSeedService
 
@@ -38,6 +38,10 @@ async def test_demo_fleet_seed_counts_relationships_and_idempotency(
     assert len({vehicle.driver_id for vehicle in vehicles}) == 1060
     assert len({vehicle.registration_number for vehicle in vehicles}) == 1060
     assert all(vehicle.active for vehicle in vehicles)
+    assert all(vehicle.model_name in VEHICLE_MODEL_FAMILIES[vehicle.vehicle_type_code] for vehicle in vehicles)
+    assert all(set(VEHICLE_MODEL_FAMILIES[code]) <= {
+        vehicle.model_name for vehicle in vehicles if vehicle.vehicle_type_code == code
+    } for code in VEHICLE_COUNTS)
 
     valid_type_count = await db_session.scalar(
         select(func.count())

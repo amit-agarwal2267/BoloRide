@@ -43,7 +43,7 @@ async def test_welcome_uses_direct_session_say_once_then_enables_listening():
     session.say.assert_called_once_with(persona.welcome, allow_interruptions=False, add_to_chat_ctx=True)
     session.input.set_audio_enabled.assert_called_once_with(True)
     session.generate_reply.assert_not_called()
-    assert "मैं Aditi BoloRide से बोल रही हूँ" in session.say.call_args.args[0]
+    assert "मैं BoloRide से Aditi हूँ" in session.say.call_args.args[0]
     assert "मदद कर सकती हूँ?" in session.say.call_args.args[0]
 
 

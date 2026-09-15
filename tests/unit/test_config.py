@@ -54,7 +54,8 @@ def test_disabled_langfuse_does_not_require_credentials(
     assert settings.langfuse_public_key is None
 
 
-def test_telephony_provider_defaults_to_console_and_accepts_twilio() -> None:
+def test_telephony_provider_defaults_to_console_and_accepts_twilio(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TELEPHONY_PROVIDER", raising=False)
     defaults = Settings(
         _env_file=None,
         database_url="postgresql+asyncpg://u:p@postgres/db",
@@ -80,7 +81,8 @@ def test_sip_provider_requires_trunk_id(provider: str) -> None:
         )
 
 
-def test_browser_provider_requires_server_owned_demo_phone() -> None:
+def test_browser_provider_requires_server_owned_demo_phone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BROWSER_DEMO_CALLER_PHONE", raising=False)
     with pytest.raises(ValidationError, match="BROWSER_DEMO_CALLER_PHONE"):
         Settings(
             _env_file=None,

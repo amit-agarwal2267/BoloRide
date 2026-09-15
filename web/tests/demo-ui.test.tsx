@@ -75,6 +75,14 @@ describe("simulated phone experience", () => {
     view.unmount(); render(<PhoneDemo/>);
     expect(screen.getByTestId("lock-screen")).toBeInTheDocument();
   });
+  it("shows an optional demo identity hint without replacing the caller's own name", () => {
+    render(<PhoneDemo/>);
+    const card = screen.getByRole("complementary", { name: "Try your own name first" });
+    expect(card).toHaveTextContent("Kabir Shah");
+    expect(card).toHaveTextContent("Age25");
+    expect(card).toHaveTextContent("If verification fails");
+    expect(card).toHaveTextContent("Age is collected only during first-time onboarding");
+  });
   it.each([[35, 230], [175, 450], [305, 665]])("unlocks from broad lower-screen point %i/%i", (x,y) => {
     render(<PhoneDemo/>); swipe(screen.getByTestId("lock-screen"), x,y,3,-85);
     expect(screen.getByTestId("home-screen")).toBeInTheDocument();

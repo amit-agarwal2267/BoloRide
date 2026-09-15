@@ -48,7 +48,6 @@ class FleetSeedService:
                         member.vehicle_id,
                         member.seed_key,
                         member.driver_name,
-                        member.availability,
                         member.latitude,
                         member.longitude,
                         member.city,
@@ -56,7 +55,6 @@ class FleetSeedService:
                         member.vehicle_type_code,
                         member.vehicle_model,
                         member.registration_number,
-                        True,
                     )
                     for member in members
                 }

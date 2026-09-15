@@ -96,7 +96,7 @@ async def entrypoint(ctx: JobContext) -> None:
             "session_id": session_id,
             "persona_id": persona.persona_id,
             "persona_name": persona.display_name,
-            "gender": persona.gender.value,
+            "persona_gender": persona.gender.value,
             "tts_speaker": persona.tts_speaker,
         },
     )

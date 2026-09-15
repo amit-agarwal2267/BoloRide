@@ -28,6 +28,7 @@ from boloride.domain.models.booking import (
     BookingOutcome,
     BookingResultStatus,
 )
+from boloride.domain.models.dispatch import AssignmentDetails, DispatchResult, DispatchResultStatus
 from boloride.domain.models.location import (
     LocationCandidate,
     LocationResolutionResult,
@@ -1530,6 +1531,12 @@ async def test_successful_booking_emits_one_complete_demo_notification() -> None
         )
     )
 
+    agent._dispatch.dispatch.return_value = DispatchResult(
+        DispatchResultStatus.ASSIGNED,
+        ride_id,
+        AssignmentDetails("Ravi", "sedan", "Maruti Suzuki Dzire", "RJ20AB1234", 5),
+    )
+
     await agent.create_booking()
 
     assert len(delivered) == 1
@@ -1540,7 +1547,8 @@ async def test_successful_booking_emits_one_complete_demo_notification() -> None
         "destination": "Kota Junction",
         "estimated_fare": "INR 245",
         "driver_name": "Ravi",
-        "vehicle_number": "RJ 20 AB 1234",
+        "vehicle_number": "RJ20AB1234",
+        "vehicle_model": "Maruti Suzuki Dzire",
         "eta": "5 min",
     }
 

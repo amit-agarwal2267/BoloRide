@@ -22,12 +22,12 @@ class AgentPersona:
         if self.gender is PersonaGender.MALE:
             return (
                 f"नमस्ते, मैं BoloRide से {name} हूँ। "
-                "मैं आपकी किस तरह मदद कर सकता हूँ?"
+                "मैं आपकी क्या मदद कर सकता हूँ?"
             )
         if self.gender is PersonaGender.FEMALE:
             return (
                 f"नमस्ते, मैं BoloRide से {name} हूँ। "
-                "मैं आपकी किस तरह मदद कर सकती हूँ?"
+                "मैं आपकी क्या मदद कर सकती हूँ?"
             )
         raise ValueError(f"Unsupported persona gender: {self.gender!r}")
 

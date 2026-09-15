@@ -1,4 +1,5 @@
 import base64
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -21,14 +22,14 @@ class Emitter:
         self.audio += audio
 
 
-def make_tts(handler) -> SarvamTTS:
+def make_tts(handler, *, speaker="amit", edge_voice="hi-IN-MadhurNeural") -> SarvamTTS:
     return SarvamTTS(
         api_key="test-secret-not-real",
         model="bulbul:v3",
-        speaker="amit",
+        speaker=speaker,
         language="hi-IN",
         pace=1.0,
-        edge_voice="hi-IN-MadhurNeural",
+        edge_voice=edge_voice,
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 
@@ -65,6 +66,31 @@ async def test_sarvam_sends_stable_v3_speaker_and_24khz_without_edge(monkeypatch
     assert emitter.initialized["sample_rate"] == 24000
     assert requests[0].headers["api-subscription-key"] == "test-secret-not-real"
     await engine.aclose()
+
+
+@pytest.mark.asyncio
+async def test_two_session_tts_engines_keep_distinct_speakers_across_turns() -> None:
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content)["speaker"])
+        return httpx.Response(200, json={"audios": [base64.b64encode(b"\x00\x00").decode()]})
+
+    kabir = make_tts(handler, speaker="kabir")
+    pooja = make_tts(handler, speaker="pooja", edge_voice="hi-IN-SwaraNeural")
+
+    async def speak(engine: SarvamTTS) -> None:
+        for text in ("पहला जवाब", "दूसरा जवाब"):
+            await engine.synthesize(text)._run(Emitter())  # type: ignore[arg-type]
+
+    await asyncio.gather(speak(kabir), speak(pooja))
+    assert requests.count("kabir") >= 2
+    assert requests.count("pooja") >= 2
+    assert set(requests) == {"kabir", "pooja"}
+    assert kabir.speaker == "kabir"
+    assert pooja.speaker == "pooja"
+    await kabir.aclose()
+    await pooja.aclose()
 
 
 @pytest.mark.asyncio

@@ -187,6 +187,7 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
   const callScreens = ["calling-tune", "connecting", "connected", "call-ended", "call-error"];
   return <main className="demo-experience">
     <nav className="demo-nav"><Link href="/" onClick={dispose}>← Back to BoloRide</Link><span>INTERACTIVE PREVIEW</span></nav>
+    <div className="demo-content-layout">
     <div className="demo-stage"><div className="phone-aura" aria-hidden="true"/>
       <PremiumPhone connected={connected} microphoneActive={connected && microphoneListening && !muted} controlsOpen={controlsOpen} onOpenControls={() => setControlsOpen(true)}>
         <div className={controlsOpen ? "screen-content screen-content--obscured" : "screen-content"} inert={controlsOpen || !!demo.dialog}>
@@ -199,6 +200,17 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
         {connected && controlsOpen && <CallControls volume={remoteVolume} onVolume={setPlaybackVolume} muted={muted} onMute={() => void toggleMute()} onClose={() => setControlsOpen(false)}/>}
         {demo.dialog && <InPhoneDialog kind={demo.dialog} onClose={() => dispatch({ type: "close-dialog" })}/>}
       </PremiumPhone>
+    </div>
+    <aside className="demo-identity-card" aria-labelledby="demo-identity-title">
+      <p className="demo-identity-eyebrow">DEMO IDENTITY TIP</p>
+      <h2 id="demo-identity-title">Try your own name first</h2>
+      <p className="demo-identity-guidance">If verification fails and this demo caller profile was registered as Kabir Shah, try the name below.</p>
+      <dl className="demo-identity-values">
+        <div><dt>Name</dt><dd>Kabir Shah</dd></div>
+        <div><dt>Age</dt><dd>25</dd></div>
+      </dl>
+      <p className="demo-identity-footnote">Age is collected only during first-time onboarding. Returning callers verify with their registered name.</p>
+    </aside>
     </div>
     <p className="simulation-notice">Live browser call · microphone permission required</p>
   </main>;

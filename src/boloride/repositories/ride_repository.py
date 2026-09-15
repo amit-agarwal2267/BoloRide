@@ -152,7 +152,7 @@ class RideRepository:
             return None
         ride, quote = row
         assignment_details = None
-        if ride.status in {RideStatus.ASSIGNED, RideStatus.ON_TRIP}:
+        if ride.status in {RideStatus.ASSIGNED, RideStatus.ON_TRIP, RideStatus.COMPLETED, RideStatus.CANCELLED}:
             assignment_details = (
                 await self._session.execute(
                     select(
@@ -166,7 +166,6 @@ class RideRepository:
                     .join(RideAssignment, RideAssignment.vehicle_id == Vehicle.id)
                     .where(
                         RideAssignment.ride_id == ride.id,
-                        RideAssignment.released_at.is_(None),
                     )
                 )
             ).one_or_none()
@@ -216,21 +215,12 @@ class RideRepository:
                 .limit(limit)
             )
         ).all()
-        return [
-            RideStatusDetails(
-                ride_id=ride.id,
-                status=ride.status,
-                pickup=ride.pickup_display_name or ride.pickup_address,
-                destination=ride.destination_display_name
-                or ride.destination_address,
-                requested_ride_at=ride.requested_ride_at,
-                vehicle_type_code=quote.vehicle_type_code if quote else None,
-                estimated_fare=quote.estimated_total if quote else ride.fare_amount,
-                currency=quote.currency if quote else ride.fare_currency,
-                final_customer_cost=ride.final_customer_cost,
-            )
-            for ride, quote in rows
-        ]
+        details = []
+        for ride, _ in rows:
+            status = await self.get_status_for_customer(customer_id, ride.id)
+            if status is not None:
+                details.append(status)
+        return details
 
     async def cancel_for_customer(
         self, customer_id: UUID, ride_id: UUID, *, expected_status: RideStatus

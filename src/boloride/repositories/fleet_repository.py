@@ -89,7 +89,6 @@ class FleetRepository:
                 Vehicle.id,
                 Driver.seed_key,
                 Driver.name,
-                Driver.availability,
                 Driver.latitude,
                 Driver.longitude,
                 Driver.city,
@@ -97,7 +96,6 @@ class FleetRepository:
                 Vehicle.vehicle_type_code,
                 Vehicle.model_name,
                 Vehicle.registration_number,
-                Vehicle.active,
             )
             .join(Vehicle, Vehicle.driver_id == Driver.id)
             .where(Driver.seed_version == seed_version)

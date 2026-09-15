@@ -13,6 +13,8 @@ from boloride.db.models.accepted_quote import AcceptedQuote
 from boloride.db.models.booking_attempt import BookingAttempt
 from boloride.db.models.offer_redemption import OfferRedemption
 from boloride.db.models.ride import Ride
+from boloride.db.models.driver import Driver
+from boloride.db.models.vehicle import Vehicle
 from boloride.domain.exceptions import DomainValidationError
 from boloride.domain.models.booking import BookingAttemptState, BookingResultStatus
 from boloride.domain.models.location import ResolvedLocation, TollStatus
@@ -29,6 +31,12 @@ from boloride.repositories.vehicle_type_repository import VehicleTypeRepository
 from boloride.services.booking_service import BookingService
 from boloride.services.offer_service import OfferService
 from boloride.services.vehicle_service import VehicleService
+from boloride.domain.models.dispatch import DispatchResultStatus
+from boloride.repositories.assignment_repository import AssignmentRepository
+from boloride.repositories.fleet_repository import FleetRepository
+from boloride.services.dispatch_service import DispatchService
+from boloride.services.fleet_seed_service import FleetSeedService
+from boloride.domain.models.fleet import CITY_CENTRES, DriverAvailability, generate_demo_fleet
 
 
 class QuoteGuard:
@@ -57,16 +65,16 @@ class NoSafeRetryProvider(MockRideProvider):
     supports_safe_retry_after_definitive_absence = False
 
 
-def make_context(customer_id, *, quote_id=None, expires_at=None, offer=None) -> RideContext:
+def make_context(customer_id, *, quote_id=None, expires_at=None, offer=None, vehicle_type="sedan", passenger_count=4, pickup=None) -> RideContext:
     now = datetime.now(UTC)
     context = RideContext(
         session_id=f"booking-{uuid4()}", caller_id=customer_id,
         identity_state=CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,
         verified_customer_id=customer_id,
-        pickup=ResolvedLocation("Home", Decimal("25.18"), Decimal("75.83")),
+        pickup=pickup or ResolvedLocation("Home", Decimal("25.18"), Decimal("75.83")),
         destination=ResolvedLocation("Station", Decimal("25.22"), Decimal("75.88")),
-        ride_time=now + timedelta(hours=1), passenger_count=4,
-        selected_vehicle_type_code="sedan",
+        ride_time=now + timedelta(hours=1), passenger_count=passenger_count,
+        selected_vehicle_type_code=vehicle_type,
     )
     components = (
         FareComponent(FareComponentType.BASE_FARE, Decimal("50.00")),
@@ -83,7 +91,7 @@ def make_context(customer_id, *, quote_id=None, expires_at=None, offer=None) -> 
             offer.percentage, offer.maximum_discount, Decimal("20.00"), offer.currency, offer.version,
         )
         total, pre_total = Decimal("180.00"), Decimal("200.00")
-    pricing = PricingResult(uuid4(), "sedan", 10000, 900, "mock", components, TollStatus.UNKNOWN, total, "INR", pre_total, applied)
+    pricing = PricingResult(uuid4(), vehicle_type, 10000, 900, "mock", components, TollStatus.UNKNOWN, total, "INR", pre_total, applied)
     quote = Quote(quote_id or uuid4(), context.session_id, "b" * 64, pricing, now, expires_at or now + timedelta(minutes=20))
     context.set_quote(quote)
     context.confirm_quote(quote.id)
@@ -100,6 +108,59 @@ def service(session, provider, *, rides=None, offers=None, lease=timedelta(secon
 
 async def customer(session: AsyncSession):
     return await UserRepository(session).create(f"9{uuid4().int % 10**9:09d}", "Stage Six", 30)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category,passengers", [
+    ("auto", 2), ("mini", 3), ("sedan", 4), ("suv", 6), ("premium", 3),
+])
+async def test_confirmed_booking_dispatches_only_the_selected_category(
+    db_session: AsyncSession, category: str, passengers: int
+):
+    await FleetSeedService(db_session, FleetRepository(db_session)).seed_demo_fleet()
+    user = await customer(db_session)
+    pickup = None
+    centre = CITY_CENTRES[0]
+    if category == "premium":
+        member = next(item for item in generate_demo_fleet() if item.vehicle_type_code == "premium")
+        pickup = ResolvedLocation("Premium demo pickup", member.latitude, member.longitude)
+        centre = next(item for item in CITY_CENTRES if item.city == member.city and item.state == member.state)
+    token = uuid4().hex
+    driver_id = uuid4()
+    db_session.add_all([
+        Driver(
+            id=driver_id, name="Booking Test Driver", availability=DriverAvailability.AVAILABLE,
+            latitude=pickup.latitude if pickup else Decimal("25.18"),
+            longitude=pickup.longitude if pickup else Decimal("75.83"),
+            city=centre.city, state=centre.state, seed_version="booking-e2e-test",
+            seed_key=f"booking-e2e:{token}",
+        ),
+        Vehicle(
+            id=uuid4(), driver_id=driver_id, vehicle_type_code=category,
+            model_name=f"{category} Booking Test Vehicle",
+            registration_number=f"RJ{10 + int(token[:2], 16) % 90:02d}{token[2:4].upper().translate(str.maketrans('0123456789', 'ABCDEFGHIJ'))}{1000 + int(token[4:8], 16) % 9000:04d}",
+            active=True,
+        ),
+    ])
+    await db_session.commit()
+    context = make_context(user.id, vehicle_type=category, passenger_count=passengers, pickup=pickup)
+    booked = await service(db_session, MockRideProvider()).book_ride(user.id, context)
+    assert booked.status is BookingResultStatus.SUCCESS
+    assert booked.ride is not None
+    assert booked.provider_result is not None
+    assert booked.provider_result.vehicle_description is None
+    dispatch = DispatchService(
+        db_session, RideRepository(db_session), FleetRepository(db_session),
+        AssignmentRepository(db_session),
+    )
+    assigned = await dispatch.dispatch(user.id, booked.ride.id)
+    assert assigned.status is DispatchResultStatus.ASSIGNED
+    assert assigned.assignment is not None
+    assert assigned.assignment.vehicle_type_code == category
+    assert assigned.assignment.vehicle_model
+    assert assigned.assignment.vehicle_registration.startswith(("RJ", "UP", "MP", "PB"))
+    assert assigned.assignment.eta_minutes >= 1
+    assert (await dispatch.dispatch(user.id, booked.ride.id)).assignment == assigned.assignment
 
 
 @pytest.mark.asyncio
