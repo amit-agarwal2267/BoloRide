@@ -10,13 +10,20 @@ from boloride.domain.models.scheduling import RideTimingIntent
 
 _CLOCK = re.compile(r"(?<!\d)(1[0-2]|0?\d)(?::([0-5]\d))?\s*(am|pm)?(?!\w)", re.I)
 _DAYPARTS = {
-    "morning": "am", "subah": "am",
-    "afternoon": "pm", "evening": "pm", "shaam": "pm", "night": "pm", "raat": "pm",
+    "morning": "am", "subah": "am", "सुबह": "am",
+    "afternoon": "pm", "dopahar": "pm", "दोपहर": "pm",
+    "evening": "pm", "shaam": "pm", "शाम": "pm",
+    "night": "pm", "raat": "pm", "रात": "pm",
+}
+_HINDI_NUMBER_WORDS = {
+    "एक": "1", "दो": "2", "तीन": "3", "चार": "4", "पांच": "5", "पाँच": "5",
+    "छह": "6", "सात": "7", "आठ": "8", "नौ": "9", "दस": "10",
+    "ग्यारह": "11", "बारह": "12",
 }
 _RELATIVE_DELAY = re.compile(
     r"(?<!\d)(\d+)\s*(?:ghant(?:a|e)|hours?)\s*(?:baad|later)(?!\w)", re.I
 )
-_IMMEDIATE_WORDS = re.compile(r"\b(?:abhi|now|immediately|asap)\b", re.I)
+_IMMEDIATE_WORDS = re.compile(r"(?:\b(?:abhi|now|immediately|asap)\b|अभी)", re.I)
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +40,7 @@ class TimeResolutionService:
         correction: bool = False,
     ) -> TimeResolutionResult:
         text = " ".join(phrase.casefold().split())
+        text = " ".join(_HINDI_NUMBER_WORDS.get(word, word) for word in text.split())
         logger.info("time_resolution_requested", extra={"event": "time_resolution_requested", "correction": correction})
         now = self._clock()
         if now.tzinfo is None:
@@ -66,7 +74,10 @@ class TimeResolutionService:
             logger.info("time_clarification_required", extra={"event": "time_clarification_required", "reason": "specific_clock_time_required"})
             timing_intent = (
                 RideTimingIntent.SCHEDULED
-                if any(word in text.split() for word in ("schedule", "scheduled", "aaj", "kal"))
+                if any(word in text.split() for word in (
+                    "schedule", "scheduled", "aaj", "आज", "kal", "कल",
+                    "parso", "परसों", "today", "tomorrow", "day",
+                ))
                 or any(word in text.split() for word in _DAYPARTS)
                 else None
             )
@@ -88,10 +99,15 @@ class TimeResolutionService:
             return TimeResolutionResult(TimeResolutionStatus.CLARIFICATION_REQUIRED, clarification_reason="valid_12_hour_time_required")
         hour = hour % 12 + (12 if marker == "pm" else 0)
         local_now = now.astimezone(self._timezone)
-        if any(word in text.split() for word in ("tomorrow", "kal")):
+        if "day after tomorrow" in text or any(
+            word in text.split() for word in ("parso", "परसों")
+        ):
+            date = local_now.date() + timedelta(days=2)
+            resolution_type = "relative_day_after_tomorrow"
+        elif any(word in text.split() for word in ("tomorrow", "kal", "कल")):
             date = local_now.date() + timedelta(days=1)
             resolution_type = "relative_tomorrow"
-        elif any(word in text.split() for word in ("today", "aaj")):
+        elif any(word in text.split() for word in ("today", "aaj", "आज")):
             date = local_now.date()
             resolution_type = "relative_today"
         elif correction and previous is not None:

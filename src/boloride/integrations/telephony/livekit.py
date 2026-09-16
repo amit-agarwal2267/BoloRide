@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from livekit.agents import AgentServer, AgentSession, JobContext, cli, room_io
 from livekit.plugins import silero
@@ -229,7 +230,10 @@ async def entrypoint(ctx: JobContext) -> None:
         tracer=observability,
         default_country=settings.default_country,
         timezone=settings.default_timezone,
-        time_resolution=TimeResolutionService(lambda: datetime.now(UTC), settings.default_timezone),
+        time_resolution=TimeResolutionService(
+            lambda: datetime.now(ZoneInfo("Asia/Kolkata")),
+            settings.default_timezone,
+        ),
         user_service=user_service,
         detected_phone=detected_phone,
         persona=persona,

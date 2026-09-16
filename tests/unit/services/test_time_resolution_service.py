@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -81,3 +82,48 @@ def test_incomplete_timing_intent_requires_specificity(service, phrase, reason, 
 def test_explicit_clock_time_is_scheduled(service):
     result = service.resolve("tomorrow 6:30 AM")
     assert result.timing_intent is RideTimingIntent.SCHEDULED
+
+
+IST = ZoneInfo("Asia/Kolkata")
+DEMO_NOW = datetime(2026, 9, 16, 14, 0, tzinfo=IST)
+
+
+@pytest.mark.parametrize(
+    ("phrase", "expected_local"),
+    [
+        ("कल सुबह 8 बजे", datetime(2026, 9, 17, 8, 0, tzinfo=IST)),
+        ("कल सुबह आठ बजे", datetime(2026, 9, 17, 8, 0, tzinfo=IST)),
+        ("kal subah 8 baje", datetime(2026, 9, 17, 8, 0, tzinfo=IST)),
+        ("tomorrow at 8 AM", datetime(2026, 9, 17, 8, 0, tzinfo=IST)),
+        ("कल शाम 6 बजे", datetime(2026, 9, 17, 18, 0, tzinfo=IST)),
+        ("आज शाम 6 बजे", datetime(2026, 9, 16, 18, 0, tzinfo=IST)),
+        ("परसों दोपहर 2 बजे", datetime(2026, 9, 18, 14, 0, tzinfo=IST)),
+        ("day after tomorrow at 8 AM", datetime(2026, 9, 18, 8, 0, tzinfo=IST)),
+    ],
+)
+def test_demo_relative_day_and_daypart_phrases(phrase, expected_local):
+    result = TimeResolutionService(lambda: DEMO_NOW).resolve(phrase)
+    assert result.status is TimeResolutionStatus.RESOLVED
+    assert result.scheduled_at.astimezone(IST) == expected_local
+
+
+@pytest.mark.parametrize("phrase", ["अभी", "abhi", "now", "अभी जाना है", "I need a cab now"])
+def test_demo_immediate_phrases_use_trusted_ist_clock(phrase):
+    result = TimeResolutionService(lambda: DEMO_NOW).resolve(phrase)
+    assert result.status is TimeResolutionStatus.RESOLVED
+    assert result.timing_intent is RideTimingIntent.IMMEDIATE
+    assert result.scheduled_at == DEMO_NOW.astimezone(UTC)
+
+
+def test_time_only_correction_preserves_previously_resolved_date_and_daypart():
+    service = TimeResolutionService(lambda: DEMO_NOW)
+    initial = service.resolve("कल सुबह 8 बजे")
+    corrected = service.resolve("8:30 कर दो", previous=initial.scheduled_at, correction=True)
+    assert corrected.status is TimeResolutionStatus.RESOLVED
+    assert corrected.scheduled_at.astimezone(IST) == datetime(2026, 9, 17, 8, 30, tzinfo=IST)
+
+
+def test_tomorrow_rolls_over_to_next_year():
+    year_end = datetime(2026, 12, 31, 14, 0, tzinfo=IST)
+    result = TimeResolutionService(lambda: year_end).resolve("कल सुबह 8 बजे")
+    assert result.scheduled_at.astimezone(IST) == datetime(2027, 1, 1, 8, 0, tzinfo=IST)
