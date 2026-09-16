@@ -27,7 +27,7 @@ export default function Home() {
     <section className="aura-hero">
       <div className="hero-intro">
         <p className="mono-kicker"><span />VOICE-FIRST MOBILITY · INDIA</p>
-        <h1>A cab ride,<br />without the <em>app dance.</em></h1>
+        <h1>A system,<br />built for <em>convenience.</em></h1>
         <p className="hero-lede">Call. Say where you need to go. BoloRide handles the rest through a natural conversation in Hindi, Hinglish, or English.</p>
         <div className="hero-ctas"><Link className="button button--red" href="/demo"><Phone weight="fill" /> Call BoloRide</Link><a className="text-link" href="#how">See how it flows <ArrowDown /></a></div>
         <div className="hero-proof"><span className="proof-avatars"><i>हि</i><i>EN</i><i>H+</i></span><p><strong>Speak normally.</strong><br />No commands to memorise.</p></div>
@@ -41,7 +41,7 @@ export default function Home() {
       </div>
     </section>
 
-    <section className="phrase-lab" id="language">
+    <section className="phrase-lab reveal-section" id="language">
       <div className="section-heading"><p className="mono-kicker"><span />TALK LIKE YOURSELF</p><h2>Indian speech is not an edge case.</h2><p>Drag the phrases. Mix the language. BoloRide is built for the way real conversations move.</p></div>
       <div className="phrase-canvas">
         <div className="canvas-grid" aria-hidden="true" />
@@ -52,14 +52,14 @@ export default function Home() {
       </div>
     </section>
 
-    <section className="why-grid" id="why">
+    <section className="why-grid reveal-section" id="why">
       <article className="why-story"><p className="mono-kicker"><span />WHY IT EXISTS</p><h2>The journey is simple.<br />The interface should be too.</h2><p>Maps, pins, fare screens and confirmation steps feel normal—until they become the reason someone needs help booking a ride.</p><blockquote><Quotes weight="fill" /> “I know where I need to go. I just need a simpler way to say it.”</blockquote></article>
       <article className="why-stat"><span>01</span><strong>One familiar action</strong><p>Make a phone call.</p><Phone weight="thin" /></article>
       <article className="why-stat why-stat--purple"><span>03</span><strong>Languages together</strong><p>Hindi · Hinglish · English</p><Waveform weight="thin" /></article>
-      <article className="why-image"><Image src="/assets/boloride-station-call.jpg" alt="An Indian railway station journey" fill sizes="(max-width: 900px) 100vw, 40vw" /></article>
+      <article className="why-image"><Image src="/assets/boloride-home-pickup.jpg" alt="An older Indian woman booking a ride by phone as her taxi arrives" fill sizes="(max-width: 900px) 100vw, 40vw" /></article>
     </section>
 
-    <section className="flow-section" id="how">
+    <section className="flow-section reveal-section" id="how">
       <div className="section-heading section-heading--row"><div><p className="mono-kicker"><span />THE CALL FLOW</p><h2>From “hello” to<br />ride confirmed.</h2></div><p>Important details are confirmed once. Fares, vehicles, and booking state come from reliable services—not an AI guess.</p></div>
       <div className="flow-list">
         <article><span>01</span><div className="flow-icon"><Phone /></div><h3>Call</h3><p>Dial BoloRide from a phone you already know.</p><b>1800-258-2334</b></article>
@@ -68,7 +68,7 @@ export default function Home() {
       </div>
     </section>
 
-    <section className="final-cta">
+    <section className="final-cta reveal-section">
       <p className="mono-kicker"><span />LIVE PRODUCT PREVIEW</p><h2>Your next ride starts<br />with a sentence.</h2><Link className="button button--red" href="/demo">Open the phone demo <ArrowUpRight weight="bold" /></Link><p className="final-note">Experimental prototype · simulated fleet · live voice connection</p>
       <div className="orbit-word" aria-hidden="true">BOLO · RIDE · BOLO · RIDE ·</div>
     </section>

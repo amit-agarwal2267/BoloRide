@@ -69,20 +69,17 @@ describe("simulated phone experience", () => {
 
   it("starts with a distinct landing page and links into the dedicated demo route", () => {
     const view = render(<Home/>);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("A cab ride");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("A system");
     expect(screen.queryByTestId("lock-screen")).not.toBeInTheDocument();
     const demoLinks = screen.getAllByRole("link").filter(link => link.getAttribute("href") === "/demo");
     expect(demoLinks).toHaveLength(3);
     view.unmount(); render(<PhoneDemo/>);
     expect(screen.getByTestId("lock-screen")).toBeInTheDocument();
   });
-  it("shows an optional demo identity hint without replacing the caller's own name", () => {
+  it("keeps the call demo focused without the identity-tip card", () => {
     render(<PhoneDemo/>);
-    const card = screen.getByRole("complementary", { name: "Try your own name first" });
-    expect(card).toHaveTextContent("Kabir Shah");
-    expect(card).toHaveTextContent("Age25");
-    expect(card).toHaveTextContent("If verification fails");
-    expect(card).toHaveTextContent("Age is collected only during first-time onboarding");
+    expect(screen.queryByText("DEMO IDENTITY TIP")).not.toBeInTheDocument();
+    expect(screen.getByTestId("lock-screen")).toBeInTheDocument();
   });
   it.each([[35, 230], [175, 450], [305, 665]])("unlocks from broad lower-screen point %i/%i", (x,y) => {
     render(<PhoneDemo/>); swipe(screen.getByTestId("lock-screen"), x,y,3,-85);
