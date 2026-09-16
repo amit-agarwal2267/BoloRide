@@ -2568,7 +2568,7 @@ a:focus-visible,
 .hero-intro { display: flex; flex-direction: column; justify-content: center; padding: 30px 0 20px 3vw; }
 .mono-kicker { display: flex; align-items: center; gap: 10px; margin: 0 0 24px; color: #4b5563; font: 650 .68rem/1 var(--font-mono), monospace; letter-spacing: .12em; }
 .mono-kicker span { width: 28px; height: 2px; background: var(--red); }
-.hero-intro h1 { margin: 0; max-width: 750px; color: #0f1013; font-size: clamp(4.4rem, 7.2vw, 8rem); font-weight: 530; line-height: .93; letter-spacing: -.075em; }
+.hero-intro h1 { margin: 0; max-width: 750px; color: #0f1013; font-size: clamp(4.4rem, 7.2vw, 8rem); font-weight: 530; line-height: 1.1; letter-spacing: -.075em; }
 .hero-intro h1 em { display: inline-block; color: var(--purple); font-style: normal; }
 .hero-lede { max-width: 620px; margin: 34px 0 30px; color: #4b5563; font-size: clamp(1rem, 1.25vw, 1.16rem); line-height: 1.75; }
 .hero-ctas { display: flex; align-items: center; gap: 28px; }
@@ -2655,7 +2655,7 @@ a:focus-visible,
 .flow-list b { position: absolute; bottom: 25px; color: #77777f; font: .58rem var(--font-mono); letter-spacing: .08em; }
 .final-cta { position: relative; min-height: 720px; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; padding: 90px 24px; color: white; background: var(--purple); text-align: center; }
 .final-cta .mono-kicker { color: #ded4ee; }
-.final-cta h2 { position: relative; z-index: 2; margin: 0 0 40px; font-size: clamp(4rem, 7vw, 8rem); font-weight: 520; line-height: .95; letter-spacing: -.07em; }
+.final-cta h2 { position: relative; z-index: 2; margin: 0 0 40px; font-size: clamp(4rem, 7vw, 8rem); font-weight: 520; line-height: .95; }
 .final-cta .button { position: relative; z-index: 2; }
 .final-note { position: relative; z-index: 2; margin-top: 25px; color: #d8ceea; font-size: .68rem; }
 .orbit-word { position: absolute; width: 700px; height: 700px; display: grid; place-items: center; border: 1px solid #ffffff20; border-radius: 50%; color: #ffffff09; font-size: 6rem; font-weight: 800; transform: rotate(-20deg); }
