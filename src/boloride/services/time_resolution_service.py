@@ -24,6 +24,15 @@ _RELATIVE_DELAY = re.compile(
     r"(?<!\d)(\d+)\s*(?:ghant(?:a|e)|hours?)\s*(?:baad|later)(?!\w)", re.I
 )
 _IMMEDIATE_WORDS = re.compile(r"(?:\b(?:abhi|now|immediately|asap)\b|अभी)", re.I)
+_TOMORROW_MORNING = re.compile(
+    r"(?:कल\s+सुबह|kal\s+subah|(?<!after\s)tomorrow\s+morning(?:\s+at)?)"
+    r"\s+(1[0-2]|0?\d)(?::([0-5]\d))?(?:\s*(?:बजे|baje))?",
+    re.I,
+)
+_TOMORROW_EXPLICIT_AM = re.compile(
+    r"(?<!after\s)tomorrow\s+at\s+(1[0-2]|0?\d)(?::([0-5]\d))?\s*am\b",
+    re.I,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +54,34 @@ class TimeResolutionService:
         now = self._clock()
         if now.tzinfo is None:
             raise ValueError("time-resolution clock must be timezone-aware")
+
+        local_now = now.astimezone(self._timezone)
+        tomorrow_morning = _TOMORROW_MORNING.search(text)
+        tomorrow_am = _TOMORROW_EXPLICIT_AM.search(text)
+        explicit_tomorrow = tomorrow_morning or tomorrow_am
+        if explicit_tomorrow is not None:
+            hour = int(explicit_tomorrow.group(1))
+            minute = int(explicit_tomorrow.group(2) or 0)
+            if hour == 0 or hour > 12:
+                return TimeResolutionResult(
+                    TimeResolutionStatus.CLARIFICATION_REQUIRED,
+                    clarification_reason="valid_12_hour_time_required",
+                )
+            date = local_now.date() + timedelta(days=1)
+            scheduled_at = datetime(
+                date.year,
+                date.month,
+                date.day,
+                hour % 12,
+                minute,
+                tzinfo=self._timezone,
+            )
+            return TimeResolutionResult(
+                TimeResolutionStatus.RESOLVED,
+                scheduled_at.astimezone(UTC),
+                resolution_type="relative_tomorrow_morning",
+                timing_intent=RideTimingIntent.SCHEDULED,
+            )
 
         if _IMMEDIATE_WORDS.search(text) or "as soon as possible" in text or text == "jaldi cab bhejo":
             return TimeResolutionResult(
@@ -98,7 +135,6 @@ class TimeResolutionService:
         if hour == 0 or hour > 12:
             return TimeResolutionResult(TimeResolutionStatus.CLARIFICATION_REQUIRED, clarification_reason="valid_12_hour_time_required")
         hour = hour % 12 + (12 if marker == "pm" else 0)
-        local_now = now.astimezone(self._timezone)
         if "day after tomorrow" in text or any(
             word in text.split() for word in ("parso", "परसों")
         ):

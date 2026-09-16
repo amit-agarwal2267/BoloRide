@@ -6,6 +6,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from livekit.agents import StopResponse, llm
@@ -572,6 +573,74 @@ async def test_quote_tool_returns_structured_missing_state_then_creates_quote() 
 
     assert "Estimated fare: INR 123" in result
     agent._quotes.create_quote.assert_awaited_once_with(context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phrase", "hour", "minute"),
+    [
+        ("कल सुबह 6 बजे", 6, 0),
+        ("कल सुबह 8 बजे", 8, 0),
+        ("कल सुबह 8:30 बजे", 8, 30),
+        ("kal subah 8 baje", 8, 0),
+        ("tomorrow at 8 AM", 8, 0),
+    ],
+)
+async def test_real_time_tool_populates_quote_authoritative_state(
+    phrase: str, hour: int, minute: int
+) -> None:
+    agent, context, _ = make_agent()
+    ist = ZoneInfo("Asia/Kolkata")
+    agent._time_resolution = TimeResolutionService(
+        lambda: datetime(2026, 9, 16, 14, 0, tzinfo=ist)
+    )
+    context.update_pickup(ResolvedLocation("Pickup", Decimal("25"), Decimal("75")))
+    context.update_destination(ResolvedLocation("Destination", Decimal("26"), Decimal("76")))
+    await agent.select_vehicle_category("auto", 2)
+    agent._quotes.create_quote.return_value = SimpleNamespace(
+        pricing=SimpleNamespace(
+            currency="INR",
+            estimated_total=Decimal("123"),
+            toll_status=TollStatus.NO_TOLL,
+            route_provider="ola",
+            route_distance_meters=1_000,
+            vehicle_type_code="auto",
+            components=(),
+        )
+    )
+
+    tool_result = json.loads(await agent.set_ride_time(phrase))
+
+    assert tool_result["status"] == "ride_time_established"
+    expected_local = datetime(2026, 9, 17, hour, minute, tzinfo=ist)
+    assert context.ride_time is not None
+    assert context.ride_time.astimezone(ist) == expected_local
+    requirements = json.loads(await agent.get_booking_requirements())
+    assert requirements["known"]["scheduled_time"] is True
+    assert "ride_timing" not in requirements["missing"]
+
+    quote_result = await agent.create_fare_quote()
+
+    assert "resolved_scheduled_time" not in quote_result
+    assert "Estimated fare: INR 123" in quote_result
+
+
+@pytest.mark.asyncio
+async def test_real_time_tool_correction_preserves_resolved_date() -> None:
+    agent, context, _ = make_agent()
+    ist = ZoneInfo("Asia/Kolkata")
+    agent._time_resolution = TimeResolutionService(
+        lambda: datetime(2026, 9, 16, 14, 0, tzinfo=ist)
+    )
+
+    await agent.set_ride_time("कल सुबह 6 बजे")
+    correction = json.loads(await agent.set_ride_time("actually 8:30", correction=True))
+
+    assert correction["status"] == "ride_time_corrected"
+    assert context.ride_time is not None
+    assert context.ride_time.astimezone(ist) == datetime(
+        2026, 9, 17, 8, 30, tzinfo=ist
+    )
 
 
 @pytest.mark.asyncio
