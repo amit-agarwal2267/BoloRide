@@ -69,9 +69,10 @@ describe("simulated phone experience", () => {
 
   it("starts with a distinct landing page and links into the dedicated demo route", () => {
     const view = render(<Home/>);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Book a ride");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("A cab ride");
     expect(screen.queryByTestId("lock-screen")).not.toBeInTheDocument();
-    screen.getAllByRole("link", { name: /Try Live Demo/ }).forEach(link => expect(link).toHaveAttribute("href", "/demo"));
+    const demoLinks = screen.getAllByRole("link").filter(link => link.getAttribute("href") === "/demo");
+    expect(demoLinks).toHaveLength(3);
     view.unmount(); render(<PhoneDemo/>);
     expect(screen.getByTestId("lock-screen")).toBeInTheDocument();
   });

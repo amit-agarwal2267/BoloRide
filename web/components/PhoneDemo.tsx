@@ -186,8 +186,19 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
   const connected = demo.screen === "connected";
   const callScreens = ["calling-tune", "connecting", "connected", "call-ended", "call-error"];
   return <main className="demo-experience">
-    <nav className="demo-nav"><Link href="/" onClick={dispose}>← Back to BoloRide</Link><span>INTERACTIVE PREVIEW</span></nav>
+    <nav className="demo-nav"><Link href="/" onClick={dispose}><span className="demo-nav-mark">B</span><strong>BoloRide</strong></Link><span>LIVE VOICE LAB · 01</span><Link className="demo-back" href="/" onClick={dispose}>Back to story ↗</Link></nav>
     <div className="demo-content-layout">
+    <aside className="demo-intro" aria-labelledby="demo-title">
+      <p className="demo-kicker"><i /> INTERACTIVE CALL</p>
+      <h1 id="demo-title">Don’t watch it.<br/><em>Call it.</em></h1>
+      <p>This is a working browser call, placed inside a familiar phone. Unlock it, open Phone, and call BoloRide from Recents.</p>
+      <ol>
+        <li><span>01</span><div><strong>Unlock</strong><small>Swipe up or tap the cue</small></div></li>
+        <li><span>02</span><div><strong>Open Phone</strong><small>BoloRide is in Recents</small></div></li>
+        <li><span>03</span><div><strong>Speak naturally</strong><small>Allow microphone access</small></div></li>
+      </ol>
+      <p className="demo-language">Try: “Kal subah 8 baje station ke liye cab book kar do.”</p>
+    </aside>
     <div className="demo-stage"><div className="phone-aura" aria-hidden="true"/>
       <PremiumPhone connected={connected} microphoneActive={connected && microphoneListening && !muted} controlsOpen={controlsOpen} onOpenControls={() => setControlsOpen(true)}>
         <div className={controlsOpen ? "screen-content screen-content--obscured" : "screen-content"} inert={controlsOpen || !!demo.dialog}>
@@ -212,6 +223,6 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
       <p className="demo-identity-footnote">Age is collected only during first-time onboarding. Returning callers verify with their registered name.</p>
     </aside>
     </div>
-    <p className="simulation-notice">Live browser call · microphone permission required</p>
+    <p className="simulation-notice">Experimental prototype · simulated fleet · microphone permission required</p>
   </main>;
 }
