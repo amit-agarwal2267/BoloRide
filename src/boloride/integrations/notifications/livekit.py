@@ -10,7 +10,7 @@ class LiveKitDemoInboxProvider:
         self._room = room
 
     async def deliver(self, notification: RideNotification) -> None:
-        self._room.local_participant.publish_data(
+        await self._room.local_participant.publish_data(
             json.dumps(notification.as_json_dict()).encode("utf-8"),
             reliable=True,
             topic="boloride.notifications",
