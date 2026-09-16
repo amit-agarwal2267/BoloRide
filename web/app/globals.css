@@ -2091,6 +2091,78 @@ a:focus-visible,
     transform: none;
   }
 }
+
+/* Phone legibility and control polish */
+.phone-screen { color: #f7f8f5; }
+.phone-app { color: #f7f8f5; background: linear-gradient(170deg, #151815, #070908 62%); }
+.phone-app header { height: 54px; padding: 5px 24px 0; }
+.phone-app header button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: #43d7e4; }
+.phone-app header button svg { width: 24px; height: 24px; }
+.phone-app header strong { color: #f7f8f5; font-size: .94rem; font-weight: 650; letter-spacing: -.01em; }
+.recents-view { padding: 18px 24px 12px; }
+.recents-view h2 { color: #f8f9f6; font-size: 2rem; line-height: 1.08; }
+.recents-view > p { margin: 8px 0 23px; color: #a7ada5; font-size: .78rem; line-height: 1.5; }
+.recent { grid-template-columns: 50px minmax(0, 1fr) auto; gap: 13px; padding: 15px 7px; color: #f5f6f2; }
+.recent strong { color: #f5f6f2; font-size: .9rem; line-height: 1.25; }
+.recent small, .recent time { color: #aeb3ac; font-size: .7rem; line-height: 1.35; }
+.recent:disabled { opacity: .6; }
+.recent:disabled strong { color: #d7dad4; }
+.recent:disabled small, .recent:disabled time { color: #929790; }
+.keypad-view { padding-top: 23px; color: #f8f9f6; }
+.dialed-number { min-height: 48px; color: #fff; font-size: 1.72rem; line-height: 1.25; }
+.dialed-number span { color: #aeb3ac; font-size: 1.05rem; }
+.clear-number { color: #54dce7; font-size: .76rem; }
+.keypad { gap: 12px 19px; margin: 13px 0; }
+.keypad button { color: #fff; background: #ffffff18; border-color: #ffffff24; }
+.keypad strong { color: #fff; font-size: 1.62rem; }
+.keypad small { color: #c9cdc7; font-size: .46rem; }
+.keypad-actions { margin-top: 3px; }
+.call-button { display: grid; place-items: center; color: #fff; }
+.call-button svg { width: 28px; height: 28px; }
+.delete-button { display: grid; place-items: center; color: #d4d7d1; }
+.delete-button svg { width: 24px; height: 24px; }
+.phone-tabs { height: 70px; padding-top: 8px; color: #a8ada6; }
+.phone-tabs button { display: flex; flex-direction: column; align-items: center; gap: 4px; color: #9ea39c; font-size: .59rem; }
+.phone-tabs button svg { width: 22px; height: 22px; }
+.phone-tabs button.active { color: #43d7e4; }
+.lock-actions span { display: grid; place-items: center; color: #fff; }
+.lock-actions svg { width: 20px; height: 20px; }
+.call-screen { color: #f8f9f6; padding-top: 92px; }
+.call-screen h2 { margin: 28px 0 5px; color: #fff; font-size: 1.9rem; line-height: 1.1; }
+.call-number { color: #b9bdb6; font-size: .88rem; line-height: 1.4; }
+.call-state { margin-top: 17px; color: #fff; font-size: 1.05rem; line-height: 1.4; }
+.assistant-label { color: #d0d3cc; font-size: .76rem; }
+.mic-state { margin-top: 9px; color: #b3b8b0; font-size: .7rem; line-height: 1.45; }
+.call-wave { margin-top: 22px; }
+.call-controls { gap: 10px; min-height: 112px; align-items: flex-start; }
+.call-controls button { width: 67px; color: #fff; }
+.call-controls button > i { width: 58px; height: 58px; margin-bottom: 9px; color: #fff; background: #ffffff20; box-shadow: inset 0 1px 0 #ffffff24; transition: transform .16s ease, background .16s ease; }
+.call-controls button:hover > i { transform: translateY(-2px); background: #ffffff2b; }
+.call-controls button:active > i { transform: scale(.96); }
+.call-controls button > i svg { width: 25px; height: 25px; }
+.call-controls span { color: #eceee9; font-size: .64rem; font-weight: 550; line-height: 1.25; }
+.call-controls button[aria-pressed="true"] > i { color: #161913; background: #f5f5f1; box-shadow: 0 6px 18px #0003; }
+.end-call > i { color: #fff !important; background: #f24f49 !important; box-shadow: 0 8px 22px #f24f4938 !important; }
+.retry-call > i { color: #fff; background: #36c86b !important; }
+.back-home > i { color: #fff; }
+.mute-icon:before, .speaker-icon:before, .end-call > i:before { content: none; }
+
+/* More breathable landing typography */
+.hero-intro h1 { max-width: 700px; font-size: clamp(4rem, 6.35vw, 7.25rem); line-height: .97; }
+.hero-lede { max-width: 590px; margin: 38px 0 34px; line-height: 1.8; }
+.section-heading { gap: clamp(42px, 6vw, 92px); margin-bottom: 72px; }
+.section-heading h2 { max-width: 740px; font-size: clamp(2.85rem, 4.45vw, 5rem); line-height: 1.06; }
+.section-heading > p { max-width: 460px; font-size: 1rem; line-height: 1.85; }
+.flow-list article { padding: 38px 38px 34px; }
+.flow-list h3 { margin-bottom: 16px; line-height: 1.2; }
+.flow-list p { line-height: 1.8; }
+.final-cta h2 { max-width: 1050px; font-size: clamp(3.7rem, 6.15vw, 7rem); line-height: 1; }
+@media (max-width: 700px) {
+  .hero-intro h1 { font-size: clamp(3.1rem, 15vw, 4.7rem); line-height: 1; }
+  .section-heading { gap: 22px; margin-bottom: 48px; }
+  .section-heading h2 { font-size: clamp(2.65rem, 13vw, 3.25rem); }
+  .flow-list article { padding: 34px 26px; }
+}
 .device-scene:hover {
   transform: none;
 }
