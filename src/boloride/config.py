@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     database_connect_timeout_seconds: float = Field(default=3.0, gt=0)
     provider_call_lease_seconds: int = Field(default=30, gt=0, le=300)
 
+    supabase_url: str | None = None
+    supabase_publishable_key: SecretStr | None = None
+
     langfuse_enabled: bool = False
     langfuse_host: str = "http://langfuse-web:3000"
     langfuse_public_key: SecretStr | None = None
@@ -100,6 +103,13 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required when Langfuse is enabled"
+            )
+        if (self.supabase_url is None) != (
+            self.supabase_publishable_key is None
+        ):
+            raise ValueError(
+                "SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY "
+                "must be configured together"
             )
         if self.telephony_provider in {"twilio", "exotel"} and not self.livekit_sip_trunk_id:
             raise ValueError(

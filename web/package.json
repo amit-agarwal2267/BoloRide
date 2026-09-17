@@ -11,6 +11,8 @@
   "dependencies": {
     "@livekit/protocol": "1.51.0",
     "@phosphor-icons/react": "^2.1.10",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.116.0",
     "livekit-client": "2.22.3",
     "livekit-server-sdk": "2.19.0",
     "motion": "^13.4.0",

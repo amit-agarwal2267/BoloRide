@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { motion } from "motion/react";
 import { ArrowDown, ArrowUpRight, Check, Microphone, Phone, Quotes, Train, Waveform } from "@phosphor-icons/react";
+import TryDemoButton from "../components/TryDemoButton";
 
 const phrases = [
   { copy: "Kal subah 8 baje", className: "phrase phrase--one" },
@@ -21,7 +22,8 @@ export default function Home() {
     <nav className="aura-nav" aria-label="Primary navigation">
       <Brand />
       <div className="aura-nav-links"><a href="#why">Why BoloRide</a><a href="#how">How it works</a><a href="#language">Indian speech</a></div>
-      <Link className="button button--ink" href="/demo">Try the call <ArrowUpRight weight="bold" /></Link>
+      {/* <Link className="button button--ink" href="/demo">Try the call <ArrowUpRight weight="bold" /></Link> */}
+      <TryDemoButton variant="nav" label="Try the call"/>
     </nav>
 
     <section className="aura-hero">
@@ -29,7 +31,10 @@ export default function Home() {
         <p className="mono-kicker"><span />VOICE-FIRST MOBILITY · INDIA</p>
         <h1>A system,<br />built for <em>convenience.</em></h1>
         <p className="hero-lede">Call. Say where you need to go. BoloRide handles the rest through a natural conversation in Hindi, Hinglish, or English.</p>
-        <div className="hero-ctas"><Link className="button button--red" href="/demo"><Phone weight="fill" /> Call BoloRide</Link><a className="text-link" href="#how">See how it flows <ArrowDown /></a></div>
+        <div className="hero-ctas">
+          {/* <Link className="button button--red" href="/demo"><Phone weight="fill" /> Call BoloRide</Link> */}
+          <TryDemoButton label="Call BoloRide" showPhoneIcon/>
+          <a className="text-link" href="#how">See how it flows <ArrowDown /></a></div>
         <div className="hero-proof"><span className="proof-avatars"><i>हि</i><i>EN</i><i>H+</i></span><p><strong>Speak normally.</strong><br />No commands to memorise.</p></div>
       </div>
 
@@ -69,7 +74,10 @@ export default function Home() {
     </section>
 
     <section className="final-cta reveal-section">
-      <p className="mono-kicker"><span />LIVE PRODUCT PREVIEW</p><h2>Your next ride starts<br />with a sentence.</h2><Link className="button button--red" href="/demo">Open the phone demo <ArrowUpRight weight="bold" /></Link><p className="final-note">Experimental prototype · simulated fleet · live voice connection</p>
+      <p className="mono-kicker"><span />LIVE PRODUCT PREVIEW</p><h2>Your next ride starts<br />with a sentence.</h2>
+      {/* <Link className="button button--red" href="/demo">Open the phone demo <ArrowUpRight weight="bold" /></Link> */}
+      <TryDemoButton label="Open the phone demo" />
+      <p className="final-note">Experimental prototype · simulated fleet · live voice connection</p>
       <div className="orbit-word" aria-hidden="true">BOLO · RIDE · BOLO · RIDE ·</div>
     </section>
 

@@ -10,5 +10,6 @@ from boloride.db.models.saved_place import SavedPlace
 from boloride.db.models.user import User
 from boloride.db.models.vehicle_type import VehicleType
 from boloride.db.models.vehicle import Vehicle
+from boloride.db.models.demo_access_request import DemoAccessRequest
 
-__all__ = ["AcceptedQuote", "BookingAttempt", "Driver", "Offer", "OfferRedemption", "PricingRule", "Ride", "RideAssignment", "SavedPlace", "User", "Vehicle", "VehicleType"]
+__all__ = ["AcceptedQuote", "BookingAttempt", "Driver", "Offer", "OfferRedemption", "PricingRule", "Ride", "RideAssignment", "SavedPlace", "User", "Vehicle", "VehicleType", "DemoAccessRequest"]

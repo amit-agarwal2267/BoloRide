@@ -24,6 +24,7 @@ dependencies = [
     "av>=18.1.0",
     "livekit-plugins-dtln>=0.1.5",
     "indic-transliteration>=2.3.82",
+    "supabase==2.31.0",
 ]
 
 [project.scripts]

@@ -3,7 +3,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from boloride.api.routes.demo_access import router as demo_access_router
 from boloride.api.routes.health import router as health_router
 from boloride.config import Settings, get_settings
 from boloride.db.session import create_database_engine, create_session_factory
@@ -64,8 +66,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.llm_router = llm_router
     application.state.maps_router = maps_router
     application.state.location_service = location_service
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3100",
+        ],
+        allow_credentials=False,
+        allow_methods=[
+            "GET",
+            "POST",
+            "OPTIONS",
+        ],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+        ],
+    )
     application.add_middleware(RequestIdMiddleware)
     application.include_router(health_router)
+    application.include_router(demo_access_router)
     return application
 
 
