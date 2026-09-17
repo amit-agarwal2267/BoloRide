@@ -1,16 +1,20 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { useState } from "react";
+import type { FormEvent } from "react";
 import { X } from "@phosphor-icons/react";
 
 import { createClient } from "../lib/supabase/client";
 
-type AuthMode = "signup" | "signin";
+type AuthMode =
+  | "signup"
+  | "signin";
 
 type AuthModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onAuthenticated: () => void | Promise<void>;
+  onAuthenticated: () =>
+    void | Promise<void>;
 };
 
 export default function AuthModal({
@@ -18,13 +22,23 @@ export default function AuthModal({
   onClose,
   onAuthenticated,
 }: AuthModalProps) {
-  const [mode, setMode] = useState<AuthMode>("signin");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [mode, setMode] =
+    useState<AuthMode>("signin");
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [email, setEmail] =
+    useState("");
+
+  const [password, setPassword] =
+    useState("");
+
+  const [loading, setLoading] =
+    useState(false);
+
+  const [error, setError] =
+    useState<string | null>(null);
+
+  const [message, setMessage] =
+    useState<string | null>(null);
 
   if (!isOpen) {
     return null;
@@ -35,19 +49,64 @@ export default function AuthModal({
     setMessage(null);
   }
 
-  function switchMode(nextMode: AuthMode) {
+  function switchMode(
+    nextMode: AuthMode,
+  ) {
     setMode(nextMode);
     setPassword("");
     resetFeedback();
   }
 
-  async function handleSignUp() {
-    const supabase = createClient();
+  async function handleGoogleSignIn() {
+    if (loading) {
+      return;
+    }
 
-    const { data, error } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-    });
+    resetFeedback();
+    setLoading(true);
+
+    try {
+      const supabase =
+        createClient();
+
+      const redirectTo =
+        `${window.location.origin}` +
+        "/auth/callback?next=/";
+
+      const { error } =
+        await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo,
+            queryParams: {
+              prompt: "select_account",
+            },
+          },
+        });
+
+      if (error) {
+        throw error;
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to sign in with Google.",
+      );
+
+      setLoading(false);
+    }
+  }
+
+  async function handleSignUp() {
+    const supabase =
+      createClient();
+
+    const { data, error } =
+      await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+      });
 
     if (error) {
       throw error;
@@ -57,6 +116,7 @@ export default function AuthModal({
       setMessage(
         "Account created. Check your email to verify your account, then sign in.",
       );
+
       return;
     }
 
@@ -64,12 +124,14 @@ export default function AuthModal({
   }
 
   async function handleSignIn() {
-    const supabase = createClient();
+    const supabase =
+      createClient();
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
+    const { error } =
+      await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
 
     if (error) {
       throw error;
@@ -78,7 +140,9 @@ export default function AuthModal({
     await onAuthenticated();
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(
+    event: FormEvent<HTMLFormElement>,
+  ) {
     event.preventDefault();
 
     if (loading) {
@@ -87,20 +151,33 @@ export default function AuthModal({
 
     resetFeedback();
 
-    const normalizedEmail = email.trim();
+    const normalizedEmail =
+      email.trim();
 
     if (!normalizedEmail) {
-      setError("Enter your email address.");
+      setError(
+        "Enter your email address.",
+      );
+
       return;
     }
 
     if (!password) {
-      setError("Enter your password.");
+      setError(
+        "Enter your password.",
+      );
+
       return;
     }
 
-    if (mode === "signup" && password.length < 8) {
-      setError("Password must contain at least 8 characters.");
+    if (
+      mode === "signup" &&
+      password.length < 8
+    ) {
+      setError(
+        "Password must contain at least 8 characters.",
+      );
+
       return;
     }
 
@@ -128,7 +205,11 @@ export default function AuthModal({
       className="request-access-backdrop"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !loading) {
+        if (
+          event.target ===
+            event.currentTarget &&
+          !loading
+        ) {
           onClose();
         }
       }}
@@ -156,19 +237,40 @@ export default function AuthModal({
           </p>
 
           <h2 id="auth-modal-title">
-            {mode === "signin" ? "Sign in to continue" : "Create your account"}
+            {mode === "signin"
+              ? "Sign in to continue"
+              : "Create your account"}
           </h2>
 
           <p>
-            {mode === "signin"
-              ? "Sign in to check your access to the live BoloRide voice demo."
-              : "Create an account to request access to the live BoloRide voice demo."}
+            Sign in to check your access
+            to the live BoloRide voice
+            demo.
           </p>
         </div>
 
-        <form className="request-access-form" onSubmit={handleSubmit}>
+        <button
+          type="button"
+          className="button button--ink request-access-submit"
+          onClick={handleGoogleSignIn}
+          disabled={loading}
+        >
+          {loading
+            ? "Please wait..."
+            : "Continue with Google"}
+        </button>
+
+        <div className="request-access-switch">
+          <p>or continue with email</p>
+        </div>
+
+        <form
+          className="request-access-form"
+          onSubmit={handleSubmit}
+        >
           <label htmlFor="boloride-auth-email">
             Email
+
             <input
               id="boloride-auth-email"
               name="email"
@@ -176,7 +278,11 @@ export default function AuthModal({
               autoComplete="email"
               placeholder="you@example.com"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(event) =>
+                setEmail(
+                  event.target.value,
+                )
+              }
               disabled={loading}
               required
             />
@@ -184,18 +290,29 @@ export default function AuthModal({
 
           <label htmlFor="boloride-auth-password">
             Password
+
             <input
               id="boloride-auth-password"
               name="password"
               type="password"
               autoComplete={
-                mode === "signup" ? "new-password" : "current-password"
+                mode === "signup"
+                  ? "new-password"
+                  : "current-password"
               }
               placeholder="Enter your password"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) =>
+                setPassword(
+                  event.target.value,
+                )
+              }
               disabled={loading}
-              minLength={mode === "signup" ? 8 : undefined}
+              minLength={
+                mode === "signup"
+                  ? 8
+                  : undefined
+              }
               required
             />
           </label>
@@ -234,10 +351,16 @@ export default function AuthModal({
         <div className="request-access-switch">
           {mode === "signin" ? (
             <p>
-              Don&apos;t have an account?{" "}
+              Don&apos;t have an
+              account?{" "}
+
               <button
                 type="button"
-                onClick={() => switchMode("signup")}
+                onClick={() =>
+                  switchMode(
+                    "signup",
+                  )
+                }
                 disabled={loading}
               >
                 Create one
@@ -245,10 +368,16 @@ export default function AuthModal({
             </p>
           ) : (
             <p>
-              Already have an account?{" "}
+              Already have an
+              account?{" "}
+
               <button
                 type="button"
-                onClick={() => switchMode("signin")}
+                onClick={() =>
+                  switchMode(
+                    "signin",
+                  )
+                }
                 disabled={loading}
               >
                 Sign in
