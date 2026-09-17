@@ -31,11 +31,6 @@ type DemoAccessResponse =
       granted_at: string | null;
     };
 
-const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_BOLORIDE_API_URL ??
-  "http://localhost:8000"
-).replace(/\/$/, "");
-
 export default function TryDemoButton({
   variant = "primary",
   label = "Try Demo",
@@ -56,7 +51,7 @@ export default function TryDemoButton({
     accessToken: string,
   ): Promise<DemoAccessResponse> {
     const response = await fetch(
-      `${API_BASE_URL}/api/demo/access`,
+      "/api/demo/access",
       {
         method: "GET",
         headers: {
@@ -82,7 +77,7 @@ export default function TryDemoButton({
     accessToken: string,
   ): Promise<DemoAccessResponse> {
     const response = await fetch(
-      `${API_BASE_URL}/api/demo/access/request`,
+      "/api/demo/access/request",
       {
         method: "POST",
         headers: {
