@@ -172,7 +172,7 @@ async def entrypoint(ctx: JobContext) -> None:
     except Exception:
         logger.exception("customer_identity_failed", extra={"event": "customer_identity_failed", "session_id": session_id})
         identity = CustomerIdentityResult(CustomerIdentityState.IDENTITY_UNAVAILABLE)
-    branch_event = "new_customer_detected" if identity.state is CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED else "returning_customer_detected" if identity.state is CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED else "customer_phone_unavailable" if identity.state is CustomerIdentityState.PHONE_UNAVAILABLE else "customer_identity_failed"
+    branch_event = "new_customer_detected" if identity.state is CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED else "returning_customer_detected" if identity.state is CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER else "customer_phone_unavailable" if identity.state is CustomerIdentityState.PHONE_UNAVAILABLE else "customer_identity_failed"
     logger.info(branch_event, extra={"event": branch_event, "session_id": session_id, "identity_result": identity.state.value})
 
     rides = RideRepository(database_session)
@@ -200,14 +200,15 @@ async def entrypoint(ctx: JobContext) -> None:
     ride_service = RideService(database_session, rides, offers, dispatch)
     ride_context = RideContext(
         session_id=session_id,
-        caller_id=None,
+        caller_id=identity.customer_id,
         identity_state=identity.state,
-        verified_customer_id=None,
+        verified_customer_id=identity.customer_id,
+        customer_display_name=identity.customer_name,
     )
     agent = BoloRideAgent(
         prompt_bundle=prompt_bundle,
         context=ride_context,
-        user_id=None,
+        user_id=identity.customer_id,
         database_session=database_session,
         locations=locations,
         saved_places=saved_places,
@@ -271,7 +272,12 @@ async def entrypoint(ctx: JobContext) -> None:
     with observability.activate():
         await session.start(agent=agent, room=ctx.room, room_options=room_options)
         try:
-            await play_deterministic_welcome(session, persona, session_id)
+            await play_deterministic_welcome(
+                session,
+                persona,
+                session_id,
+                customer_name=identity.customer_name,
+            )
         finally:
             welcome_completed.set()
     lifecycle = SessionLifecycleController(
@@ -292,12 +298,21 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 async def play_deterministic_welcome(
-    session: AgentSession, persona: AgentPersona, session_id: str
+    session: AgentSession,
+    persona: AgentPersona,
+    session_id: str,
+    *,
+    customer_name: str | None = None,
 ) -> bool:
     """Speak the fixed welcome once, with caller audio disabled and no LLM call."""
     logger.info("deterministic_welcome_started", extra={"event": "deterministic_welcome_started", "session_id": session_id, "gender": persona.gender.value})
     try:
-        handle = session.say(persona.welcome, allow_interruptions=False, add_to_chat_ctx=True)
+        welcome = (
+            f"नमस्ते {customer_name} जी, BoloRide में आपका स्वागत है।"
+            if customer_name
+            else persona.welcome
+        )
+        handle = session.say(welcome, allow_interruptions=False, add_to_chat_ctx=True)
         await handle.wait_for_playout()
     except Exception:
         logger.exception("deterministic_welcome_failed", extra={"event": "deterministic_welcome_failed", "session_id": session_id, "gender": persona.gender.value})

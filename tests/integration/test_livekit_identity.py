@@ -123,7 +123,7 @@ async def test_new_customer_corrections_are_submitted_once_and_unlock_tools():
 
     response = await agent.submit_customer_identity()
 
-    assert "verified" in response.lower()
+    assert "registration completed" in response.lower()
 
     users.onboard_customer.assert_awaited_once_with(
         "9876543210",
@@ -140,7 +140,7 @@ async def test_new_customer_corrections_are_submitted_once_and_unlock_tools():
 
 
 @pytest.mark.asyncio
-async def test_returning_customer_uses_name_only_and_unlocks_tools():
+async def test_returning_customer_is_already_established_and_never_collects_profile():
     customer_id = uuid4()
 
     result = CustomerIdentityResult(
@@ -149,30 +149,23 @@ async def test_returning_customer_uses_name_only_and_unlocks_tools():
     )
 
     agent, context, users, _ = agent_for(
-        CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED,
+        CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,
         result,
     )
+    context.establish_identity(CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER, customer_id)
+    context.customer_display_name = "Amit Agarwal"
 
     requirements = await agent.get_identity_requirements()
 
-    assert "do not ask for age" in requirements.lower()
-
-    await agent.record_identity_details(
-        name="Amit Agarwal"
-    )
-
-    await agent.submit_customer_identity()
-
-    users.resolve_returning_customer.assert_awaited_once_with(
-        "9876543210",
-        "Amit Agarwal",
-    )
+    assert "do not request identity details again" in requirements.lower()
+    assert "already established" in (await agent.record_identity_details(name="Wrong")).lower()
+    users.resolve_returning_customer.assert_not_awaited()
 
     assert context.identity_verified
 
 
 @pytest.mark.asyncio
-async def test_mismatch_keeps_tools_locked_and_allows_name_retry():
+async def test_obsolete_returning_verification_state_cannot_run_name_matching():
     mismatch = CustomerIdentityResult(
         CustomerIdentityState.NAME_MISMATCH
     )
@@ -182,13 +175,8 @@ async def test_mismatch_keeps_tools_locked_and_allows_name_retry():
         mismatch,
     )
 
-    await agent.record_identity_details(
-        name="Wrong Name"
-    )
-
     response = await agent.submit_customer_identity()
-
-    assert "did not match" in response.lower()
+    assert "cannot proceed" in response.lower()
     assert not context.identity_verified
 
     previous_rides = await agent.get_previous_rides()
@@ -198,16 +186,7 @@ async def test_mismatch_keeps_tools_locked_and_allows_name_retry():
         in previous_rides.lower()
     )
 
-    await agent.record_identity_details(
-        name="Corrected Name"
-    )
-
-    await agent.submit_customer_identity()
-
-    assert (
-        users.resolve_returning_customer.await_count
-        == 2
-    )
+    users.resolve_returning_customer.assert_not_awaited()
 
 
 @pytest.mark.asyncio

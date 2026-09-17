@@ -57,6 +57,25 @@ async def test_welcome_failure_restores_listening_without_identity_mutation():
     session.input.set_audio_enabled.assert_called_once_with(True)
 
 
+@pytest.mark.asyncio
+async def test_returning_customer_welcome_uses_persisted_name_without_llm():
+    persona = AgentPersona(
+        "staff-aditi", "Aditi", PersonaGender.FEMALE, "female-voice"
+    )
+    session = Session()
+
+    assert await play_deterministic_welcome(
+        session, persona, "session", customer_name="Kabir Shah"
+    ) is True
+
+    session.say.assert_called_once_with(
+        "नमस्ते Kabir Shah जी, BoloRide में आपका स्वागत है।",
+        allow_interruptions=False,
+        add_to_chat_ctx=True,
+    )
+    session.generate_reply.assert_not_called()
+
+
 def test_caller_phone_prefers_adapter_metadata_then_development_fallback():
     ctx = SimpleNamespace(job=SimpleNamespace(metadata='{"phone_number":"+919876543210"}'), room=SimpleNamespace(remote_participants={}))
     assert _caller_phone(ctx, "+919999999999") == "+919876543210"

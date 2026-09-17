@@ -17,17 +17,20 @@ class UserService:
         self._users = users
 
     async def begin_identity(self, detected_phone: str | None) -> CustomerIdentityResult:
-        """Discover the required branch without treating phone alone as verification."""
+        """Establish an existing customer from trusted caller metadata."""
         if detected_phone is None or not detected_phone.strip():
             return CustomerIdentityResult(CustomerIdentityState.PHONE_UNAVAILABLE)
         normalized_phone = normalize_indian_phone_number(detected_phone)
         customer = await self._users.get_by_phone(normalized_phone)
-        state = (
-            CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED
-            if customer is None
-            else CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED
+        if customer is None:
+            return CustomerIdentityResult(
+                CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED
+            )
+        return CustomerIdentityResult(
+            CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,
+            customer_id=customer.id,
+            customer_name=customer.name,
         )
-        return CustomerIdentityResult(state)
 
     async def resolve_returning_customer(
         self, detected_phone: str | None, provided_name: str | None
@@ -74,13 +77,13 @@ class UserService:
         creation = await self._users.create_or_get(detected_phone, name, age)
 
         if not creation.created:
-            if customer_name_match_strategy(creation.user.normalized_name, name) == "none":
-                return CustomerIdentityResult(CustomerIdentityState.NAME_MISMATCH)
             return CustomerIdentityResult(
                 CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER,
                 customer_id=creation.user.id,
+                customer_name=creation.user.name,
             )
         return CustomerIdentityResult(
             CustomerIdentityState.ONBOARDED_NEW_CUSTOMER,
             customer_id=creation.user.id,
+            customer_name=creation.user.name,
         )

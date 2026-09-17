@@ -17,6 +17,7 @@ class CustomerIdentityState(StrEnum):
 class CustomerIdentityResult:
     state: CustomerIdentityState
     customer_id: UUID | None = None
+    customer_name: str | None = None
 
     def __post_init__(self) -> None:
         verified = self.state in {
@@ -27,6 +28,8 @@ class CustomerIdentityResult:
             raise ValueError(
                 "customer_id must be present only for an established customer identity"
             )
+        if self.customer_name is not None and not verified:
+            raise ValueError("customer_name is available only for an established identity")
 
     @property
     def verified(self) -> bool:

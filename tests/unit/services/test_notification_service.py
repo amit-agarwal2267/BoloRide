@@ -9,6 +9,9 @@ from boloride.domain.models.notification import (
     RideNotificationType,
 )
 from boloride.services.notification_service import NotificationService
+from boloride.integrations.notifications.livekit import LiveKitDemoInboxProvider
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 
 def notification() -> RideNotification:
@@ -39,3 +42,19 @@ async def test_notification_failure_never_escapes() -> None:
             raise RuntimeError("delivery unavailable")
 
     await NotificationService(Provider()).deliver(notification())
+
+
+@pytest.mark.asyncio
+async def test_livekit_demo_delivery_awaits_publish_data() -> None:
+    publish_data = AsyncMock()
+    provider = LiveKitDemoInboxProvider(
+        SimpleNamespace(local_participant=SimpleNamespace(publish_data=publish_data))
+    )
+
+    await provider.deliver(notification())
+
+    publish_data.assert_awaited_once()
+    assert publish_data.await_args.kwargs == {
+        "reliable": True,
+        "topic": "boloride.notifications",
+    }

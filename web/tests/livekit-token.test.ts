@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { AgentDispatchClient } from "livekit-server-sdk";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { issueDemoToken } from "../lib/livekit-token";
 
 function payload(jwt: string) {
@@ -7,13 +8,20 @@ function payload(jwt: string) {
 
 const environment = {
   LIVEKIT_URL: "wss://demo.livekit.cloud",
+  LIVEKIT_HTTP_URL: "https://demo.livekit.cloud",
+  LIVEKIT_BROWSER_URL: "wss://demo.livekit.cloud",
   LIVEKIT_API_KEY: "ci_demo_key",
   LIVEKIT_API_SECRET: "ci_demo_secret_never_for_browser",
   LIVEKIT_AGENT_NAME: "boloride-dev",
 };
 
 describe("browser demo token", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("is short-lived, room-scoped, minimal, and explicitly dispatches the agent", async () => {
+    const createDispatch = vi
+      .spyOn(AgentDispatchClient.prototype, "createDispatch")
+      .mockResolvedValue({ id: "test-dispatch" } as never);
     const result = await issueDemoToken(environment);
     const claims = payload(result.participantToken);
 
@@ -25,13 +33,22 @@ describe("browser demo token", () => {
       canPublishData: false,
       canSubscribe: true,
     });
-    expect(claims.roomConfig.agents[0].agentName).toBe("boloride-dev");
-    expect(claims.roomConfig.agents[0].metadata).toBe('{"transport":"browser"}');
+    expect(createDispatch).toHaveBeenCalledWith(
+      result.roomName,
+      "boloride-dev",
+      {
+        metadata:
+          '{"client":"boloride-web-demo","mode":"microphone","transport":"browser"}',
+      },
+    );
     expect(claims.exp).toBeGreaterThanOrEqual(Math.floor(Date.now() / 1000) + 590);
     expect(claims.exp).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 600);
   });
 
   it("never returns or embeds the API secret and creates fresh identities", async () => {
+    vi.spyOn(AgentDispatchClient.prototype, "createDispatch").mockResolvedValue({
+      id: "test-dispatch",
+    } as never);
     const first = await issueDemoToken(environment);
     const second = await issueDemoToken(environment);
     const serialized = JSON.stringify(first);

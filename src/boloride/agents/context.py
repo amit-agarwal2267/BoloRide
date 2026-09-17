@@ -17,6 +17,7 @@ class RideContext:
 	caller_id: UUID | None
 	identity_state: CustomerIdentityState | None = None
 	verified_customer_id: UUID | None = None
+	customer_display_name: str | None = None
 	pending_customer_name: str | None = None
 	pending_customer_age: int | None = None
 	intent: str | None = None

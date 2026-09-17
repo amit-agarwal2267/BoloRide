@@ -19,7 +19,8 @@ class UserRepositoryStub:
 
     async def create_or_get(self, phone_number: str, name: str, age: int):
         user = self.user or SimpleNamespace(
-            id=uuid4(), normalized_name=" ".join(name.split()).casefold(), age=age
+            id=uuid4(), name=" ".join(name.split()),
+            normalized_name=" ".join(name.split()).casefold(), age=age
         )
         return UserCreationResult(user, self.created)
 
@@ -40,12 +41,13 @@ async def test_unknown_phone_requires_onboarding() -> None:
 
 
 @pytest.mark.asyncio
-async def test_identity_discovery_distinguishes_returning_without_verifying_phone_alone() -> None:
-    user = SimpleNamespace(id=uuid4(), normalized_name="amit agarwal")
+async def test_identity_discovery_establishes_returning_customer_from_trusted_phone() -> None:
+    user = SimpleNamespace(id=uuid4(), name="Amit Agarwal", normalized_name="amit agarwal")
     service = UserService(UserRepositoryStub(user))  # type: ignore[arg-type]
     result = await service.begin_identity("9876543210")
-    assert result.state is CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED
-    assert result.customer_id is None
+    assert result.state is CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER
+    assert result.customer_id == user.id
+    assert result.customer_name == "Amit Agarwal"
 
 
 @pytest.mark.asyncio
@@ -140,9 +142,10 @@ async def test_existing_customer_does_not_require_age_for_verification() -> None
 
 
 @pytest.mark.asyncio
-async def test_racing_existing_customer_with_other_name_is_not_verified() -> None:
-    user = SimpleNamespace(id=uuid4(), normalized_name="amit agarwal", age=30)
+async def test_racing_existing_customer_uses_authoritative_trusted_phone_record() -> None:
+    user = SimpleNamespace(id=uuid4(), name="Amit Agarwal", normalized_name="amit agarwal", age=30)
     service = UserService(UserRepositoryStub(user, created=False))  # type: ignore[arg-type]
     result = await service.onboard_customer("9876543210", "Someone Else", 40)
-    assert result.state is CustomerIdentityState.NAME_MISMATCH
-    assert result.customer_id is None
+    assert result.state is CustomerIdentityState.VERIFIED_RETURNING_CUSTOMER
+    assert result.customer_id == user.id
+    assert result.customer_name == "Amit Agarwal"

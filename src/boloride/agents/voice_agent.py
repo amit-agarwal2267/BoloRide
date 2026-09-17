@@ -48,7 +48,7 @@ from boloride.observability.session_metrics import FunnelMilestone
 from boloride.observability.tracing import SessionOutcome, Tracer
 from boloride.repositories.ride_repository import RideRepository
 from boloride.services.booking_service import BookingService
-from boloride.services.guardrail_service import GuardrailService
+from boloride.services.guardrail_service import GuardrailCategory, GuardrailService
 from boloride.services.location_service import LocationService
 from boloride.services.quote_service import QuoteService
 from boloride.services.offer_service import OfferService
@@ -143,7 +143,21 @@ class BoloRideAgent(Agent):
         if metrics is not None:
             metrics.record_guardrail(blocked=True, terminated=terminate)
         male = self._persona is not None and self._persona.gender.value == "male"
-        if terminate:
+        if decision.category is GuardrailCategory.DRIVER_GENDER_PREFERENCE:
+            message = (
+                "माफ़ कीजिए, drivers हमारे automated allocation system से assign होते हैं, "
+                "इसलिए मैं gender के आधार पर driver select नहीं कर सकता।"
+                if male
+                else "माफ़ कीजिए, drivers हमारे automated allocation system से assign होते हैं, "
+                "इसलिए मैं gender के आधार पर driver select नहीं कर सकती।"
+            )
+        elif decision.category is GuardrailCategory.OUT_OF_SCOPE:
+            message = (
+                "मैं केवल BoloRide की ride booking और ride-related सहायता में मदद कर सकता हूँ।"
+                if male
+                else "मैं केवल BoloRide की ride booking और ride-related सहायता में मदद कर सकती हूँ।"
+            )
+        elif terminate:
             message = (
                 "मैं इस request में मदद नहीं कर सकता। आप दोबारा call कर सकते हैं।"
                 if male
@@ -237,11 +251,6 @@ class BoloRideAgent(Agent):
             return "Customer identification is temporarily unavailable. Please try again."
         if state is CustomerIdentityState.NEW_CUSTOMER_ONBOARDING_REQUIRED:
             return "Collect the caller's name and age for first-time onboarding."
-        if state in {
-            CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED,
-            CustomerIdentityState.NAME_MISMATCH,
-        }:
-            return "Collect the caller's name for returning-customer verification. Do not ask for age."
         if self.ride_context.identity_verified:
             return "Customer identity is ready. Do not request identity details again."
         return "Customer identification is temporarily unavailable. Please try again."
@@ -260,7 +269,7 @@ class BoloRideAgent(Agent):
 
     @function_tool
     async def submit_customer_identity(self) -> str:
-        """Onboard or verify using UserService; the LLM never decides identity matches."""
+        """Onboard a new trusted-phone customer using UserService."""
         if self.ride_context.identity_verified:
             return "Customer identity is already established."
         if self._user_service is None:
@@ -274,15 +283,6 @@ class BoloRideAgent(Agent):
                     self._detected_phone,
                     self.ride_context.pending_customer_name,
                     self.ride_context.pending_customer_age,
-                )
-            elif state in {
-                CustomerIdentityState.RETURNING_CUSTOMER_VERIFICATION_REQUIRED,
-                CustomerIdentityState.NAME_MISMATCH,
-            }:
-                if not self.ride_context.pending_customer_name:
-                    return "Name is required for returning-customer verification."
-                result = await self._user_service.resolve_returning_customer(
-                    self._detected_phone, self.ride_context.pending_customer_name
                 )
             else:
                 return "Customer identification cannot proceed in the current state."
@@ -303,13 +303,15 @@ class BoloRideAgent(Agent):
                 await self._database_session.rollback()
                 logger.exception("customer_identity_failed", extra={"event": "customer_identity_failed", "session_id": self.ride_context.session_id})
                 return "Customer identification is temporarily unavailable. Please try again."
+        registered_name = result.customer_name or self.ride_context.pending_customer_name
         self.ride_context.establish_identity(result.state, result.customer_id)
+        self.ride_context.customer_display_name = registered_name
         self._mark_milestone(FunnelMilestone.IDENTIFIED)
         self._user_id = result.customer_id
         completed_event = "customer_onboarding_completed" if result.state is CustomerIdentityState.ONBOARDED_NEW_CUSTOMER else "customer_verification_completed"
         logger.info(completed_event, extra={"event": completed_event, "session_id": self.ride_context.session_id})
         logger.info("customer_identity_ready", extra={"event": "customer_identity_ready", "session_id": self.ride_context.session_id, "identity_result": result.state.value})
-        return "Customer identity verified. Ride services are now available."
+        return "Customer registration completed. Ride services are now available."
 
     def _trace_metadata(self, tool_name: str) -> dict[str, object]:
         return {"session_id": self.ride_context.session_id, "tool_name": tool_name}
@@ -564,6 +566,8 @@ class BoloRideAgent(Agent):
             missing.append("resolved_destination")
         if self.ride_context.ride_time is None:
             missing.append("ride_timing")
+        if self.ride_context.passenger_count_source is not PassengerCountSource.USER_PROVIDED:
+            missing.append("passenger_count")
         if self.ride_context.selected_vehicle_type_code is None:
             missing.append("selected_vehicle_category")
         return json.dumps(
@@ -1582,7 +1586,7 @@ class BoloRideAgent(Agent):
         passenger_count: int | None = None,
         cheapest: bool = False,
     ) -> str:
-        """List backend-supported vehicle categories eligible by capacity and optionally compare backend prices; this is not live driver availability or promotional offers."""
+        """List backend-supported vehicle categories only after ride time and caller-provided passenger count; this is not live driver availability or promotional offers."""
         async with self._state_operation_lock:
             return await self._get_supported_vehicle_categories_locked(
                 passenger_count, cheapest

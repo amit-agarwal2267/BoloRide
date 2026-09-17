@@ -9,6 +9,8 @@ class GuardrailCategory(StrEnum):
     CONFIRMATION_BYPASS = "confirmation_bypass"
     UNAUTHORIZED_INTERNAL_ACTION = "unauthorized_internal_action"
     IDENTITY_BYPASS = "identity_bypass"
+    OUT_OF_SCOPE = "out_of_scope"
+    DRIVER_GENDER_PREFERENCE = "driver_gender_preference"
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +20,27 @@ class GuardrailDecision:
 
 
 _PATTERNS: tuple[tuple[GuardrailCategory, re.Pattern[str]], ...] = (
+    (
+        GuardrailCategory.DRIVER_GENDER_PREFERENCE,
+        re.compile(
+            r"(?:\b(?:want|need|prefer|get|assign|select)\b.{0,36}"
+            r"\b(?:female|male|lady|woman)\s+driver\b|"
+            r"\b(?:female|male|lady|woman)\s+driver\b.{0,36}"
+            r"\b(?:want|need|prefer|chahiye|assign|select)\b|"
+            r"(?:महिला|पुरुष|female|male|lady)\s+driver.{0,24}(?:चाहिए|करो|कीजिए|assign|select))",
+            re.I,
+        ),
+    ),
+    (
+        GuardrailCategory.OUT_OF_SCOPE,
+        re.compile(
+            r"\b(?:write|generate)\b.{0,20}\b(?:python|code|essay)\b|"
+            r"\b(?:explain|teach)\b.{0,24}\b(?:recursion|docker|coding|programming)\b|"
+            r"\b(?:solve|help me solve)\b.{0,24}\b(?:coding|programming)\b|"
+            r"\b(?:prime minister|capital of france|tell me a joke)\b",
+            re.I,
+        ),
+    ),
     (
         GuardrailCategory.PROMPT_DISCLOSURE,
         re.compile(
@@ -65,7 +88,7 @@ _PATTERNS: tuple[tuple[GuardrailCategory, re.Pattern[str]], ...] = (
 
 
 class GuardrailService:
-    """Block only high-confidence meta/security manipulation patterns."""
+    """Block high-confidence security, unsupported, and unrelated requests."""
 
     def evaluate(self, text: str) -> GuardrailDecision:
         normalized = " ".join(text.split())

@@ -487,6 +487,34 @@ async def test_guardrail_blocks_before_llm_and_third_event_ends_session() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("utterance", "expected"),
+    [
+        ("Write Python code for me", "केवल BoloRide"),
+        ("मुझे female driver चाहिए", "automated allocation system"),
+        ("Can you assign a male driver?", "gender के आधार"),
+    ],
+)
+async def test_runtime_scope_and_driver_preference_guardrails(
+    utterance: str, expected: str
+) -> None:
+    agent, _, _ = make_agent()
+    session = SimpleNamespace(
+        say=Mock(return_value=SimpleNamespace(wait_for_playout=AsyncMock())),
+        shutdown=Mock(),
+    )
+    message = llm.ChatMessage(role="user", content=[utterance])
+
+    with patch.object(
+        BoloRideAgent, "session", new_callable=PropertyMock, return_value=session
+    ), pytest.raises(StopResponse):
+        await agent.on_user_turn_completed(llm.ChatContext.empty(), message)
+
+    assert expected in session.say.call_args.args[0]
+    session.shutdown.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_customer_can_finish_session_cleanly_after_successful_flow() -> None:
     agent, context, _ = make_agent()
     session = SimpleNamespace(
@@ -966,6 +994,39 @@ async def test_booking_requirements_reuse_known_fields_and_derive_phase() -> Non
 
     assert known["known"]["pickup_geography"] is True
     assert known["next_missing"] == "resolved_pickup"
+
+
+@pytest.mark.asyncio
+async def test_booking_requirements_follow_city_first_conversational_order() -> None:
+    agent, context, _ = make_agent()
+
+    assert json.loads(await agent.get_booking_requirements())["next_missing"] == "pickup_geography"
+
+    await agent.establish_pickup_geography("Indore")
+    assert json.loads(await agent.get_booking_requirements())["next_missing"] == "resolved_pickup"
+
+    context.update_pickup(
+        ResolvedLocation("Pickup", Decimal("22.7"), Decimal("75.8"), city="Indore")
+    )
+    assert json.loads(await agent.get_booking_requirements())["next_missing"] == "resolved_destination"
+
+    context.update_destination(
+        ResolvedLocation("Destination", Decimal("22.8"), Decimal("75.9"), city="Indore")
+    )
+    assert json.loads(await agent.get_booking_requirements())["next_missing"] == "ride_timing"
+
+    context.update_ride_timing(
+        RideTimingIntent.SCHEDULED,
+        datetime(2026, 9, 7, 8, tzinfo=ZoneInfo("Asia/Kolkata")),
+    )
+    assert json.loads(await agent.get_booking_requirements())["next_missing"] == "passenger_count"
+
+    result = json.loads(await agent.set_passenger_count(2))
+    assert result["status"] == "passenger_count_recorded"
+    assert (
+        json.loads(await agent.get_booking_requirements())["next_missing"]
+        == "selected_vehicle_category"
+    )
 
 
 @pytest.mark.asyncio
