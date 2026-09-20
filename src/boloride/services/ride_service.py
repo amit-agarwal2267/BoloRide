@@ -107,7 +107,7 @@ class RideService:
                 "purpose": purpose,
             },
         )
-        if candidate_number is not None:
+        if candidate_number is not None and context.ride_reference_candidates:
             if (
                 context.ride_reference_purpose != purpose
                 or not 1 <= candidate_number <= len(context.ride_reference_candidates)
@@ -121,6 +121,12 @@ class RideService:
             ):
                 return RideReferenceResolution(RideReferenceResolutionStatus.NOT_FOUND)
             return self._resolved_reference(context, details, purpose)
+
+        # A model may optimistically pass candidate_number=1 after a generic ride
+        # lookup. Candidate numbers are authoritative only when this resolver
+        # created the candidate list. Without that state, ignore the number and
+        # resolve cancellable rides deterministically below.
+        candidate_number = None
 
         rides = await self._rides.list_status_for_customer(customer_id, limit=limit)
         if cancellable_only:
