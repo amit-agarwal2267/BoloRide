@@ -1041,9 +1041,11 @@ async def test_repeated_location_failure_escalates_to_landmark_without_provider_
     second = json.loads(await agent.search_locations("Unknown place", "pickup"))
 
     assert first["recovery_level"] == 1
-    assert first["instruction"] == "Ask for the city once more."
+    assert first["refinement_depth"] == 1
+    assert "additional useful geographic detail" in first["instruction"]
     assert second["recovery_level"] == 2
-    assert second["instruction"] == "Ask for a nearby landmark."
+    assert second["refinement_depth"] == 2
+    assert "additional useful geographic detail" in second["instruction"]
     assert "google" not in json.dumps(second).casefold()
 
 
@@ -1074,7 +1076,7 @@ def test_conversation_contract_is_short_turn_language_and_confirmation_aware() -
 
     # Location clarification managed prompt.
     assert (
-        "ask only which city the ride starts in"
+        "same progressive geographic narrowing policy"
         in instructions
     )
     assert (
@@ -1082,8 +1084,7 @@ def test_conversation_contract_is_short_turn_language_and_confirmation_aware() -
         in instructions
     )
     assert (
-        "Pickup geography provides context "
-        "but does not constrain the destination"
+        "Preserve explicit intercity destination geography"
         in instructions
     )
 
