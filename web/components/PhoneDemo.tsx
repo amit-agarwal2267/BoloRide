@@ -57,6 +57,34 @@ function messageBody(message: RideNotification) {
     : `Your BoloRide has been cancelled successfully.\nRIDE ID: ${message.ride_id}\nSource: ${p.source}\nDestination: ${p.destination}\nBooking Time: ${p.booking_time}\nCancellation Time: ${p.cancellation_time}`;
 }
 
+function IphoneNotification({ notification, onDismiss }: { notification: RideNotification; onDismiss: () => void }) {
+  const [offset, setOffset] = useState(0);
+  const startX = useRef<number | null>(null);
+  useEffect(() => {
+    const timer = window.setTimeout(onDismiss, 5000);
+    return () => window.clearTimeout(timer);
+  }, [notification.notification_id, onDismiss]);
+  const finish = () => {
+    if (Math.abs(offset) >= 70) onDismiss();
+    else setOffset(0);
+    startX.current = null;
+  };
+  return <div
+    className="iphone-notification"
+    role="status"
+    aria-label="BoloRide notification"
+    style={{ transform: `translateX(${offset}px)`, opacity: Math.max(.2, 1 - Math.abs(offset) / 220) }}
+    onPointerDown={event => { startX.current = event.clientX; event.currentTarget.setPointerCapture?.(event.pointerId); }}
+    onPointerMove={event => { if (startX.current !== null) setOffset(event.clientX - startX.current); }}
+    onPointerUp={finish}
+    onPointerCancel={finish}
+  >
+    <div className="iphone-notification-head"><span className="message-avatar">B</span><strong>BoloRide</strong><time>now</time></div>
+    <p>{messageBody(notification).split("\n")[0]}</p>
+    <small>Swipe left or right to dismiss</small>
+  </div>;
+}
+
 function MessagesApp({ messages, thread, onHome, onThread }: { messages: RideNotification[]; thread: boolean; onHome: () => void; onThread: () => void }) {
   const latest = messages.at(-1);
   return <div className="phone-screen messages-app"><header><button onClick={thread ? onHome : onHome} aria-label="Back to home">‹</button><strong>{thread ? "BR24IC42" : "Messages"}</strong><span /></header>{thread ? <div className="message-thread">{messages.length ? messages.map(message => <div className="message-bubble" key={message.notification_id}>{messageBody(message).split("\n").map((line, index) => <span key={index}>{line}</span>)}</div>) : <p className="empty-messages">No messages yet.</p>}</div> : <div className="message-list"><h2>Messages</h2>{latest ? <button onClick={onThread}><span className="message-avatar">B</span><span><strong>BR24IC42</strong><small>{messageBody(latest).split("\n")[0]}</small></span><time>{new Date(latest.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></button> : <p className="empty-messages">No messages yet.</p>}</div>}</div>;
@@ -110,6 +138,7 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
   const [error, setError] = useState("");
   const [messages, setMessages] = useState<RideNotification[]>([]);
   const [unread, setUnread] = useState(0);
+  const [notificationBanner, setNotificationBanner] = useState<RideNotification | null>(null);
   const [demoPhone, setDemoPhone] = useState<{ masked_number: string; in_use: boolean } | null>(null);
   const [rollingPhone, setRollingPhone] = useState(false);
   const [phoneError, setPhoneError] = useState("");
@@ -177,6 +206,7 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
         transport.setNotificationHandler?.(notification => {
           setMessages(current => current.some(item => item.notification_id === notification.notification_id) ? current : [...current, notification]);
           setUnread(value => value + 1);
+          setNotificationBanner(notification);
         });
         transport.setVolume(1);
         await transport.connect(attempt.abort.signal);
@@ -233,11 +263,12 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
       <PremiumPhone connected={connected} microphoneActive={connected && microphoneListening && !muted} controlsOpen={controlsOpen} onOpenControls={() => setControlsOpen(true)}>
         <div className={controlsOpen ? "screen-content screen-content--obscured" : "screen-content"} inert={controlsOpen || !!demo.dialog}>
           {demo.screen === "locked" && <LockScreen onUnlock={() => dispatch({ type: "unlock" })}/>}
-          {demo.screen === "home" && <HomeScreen unread={unread} onMessages={() => dispatch({ type: "open-messages" })} onPhone={() => dispatch({ type: "open-phone" })} onUnavailable={() => dispatch({ type: "open-unavailable-app" })}/>} 
+          {demo.screen === "home" && <HomeScreen unread={unread} onMessages={() => { setNotificationBanner(null); dispatch({ type: "open-messages" }); }} onPhone={() => dispatch({ type: "open-phone" })} onUnavailable={() => dispatch({ type: "open-unavailable-app" })}/>} 
           {(demo.screen === "messages" || demo.screen === "message-thread") && <MessagesApp messages={messages} thread={demo.screen === "message-thread"} onHome={() => dispatch({ type: "home" })} onThread={() => { setUnread(0); dispatch({ type: "open-message-thread" }); }}/>} 
           {(demo.screen === "phone-recents" || demo.screen === "phone-keypad") && <PhoneApp screen={demo.screen} digits={demo.digits} onHome={() => dispatch({ type: "home" })} onRecents={() => dispatch({ type: "open-recents" })} onKeypad={() => dispatch({ type: "open-keypad" })} onDigit={digit => dispatch({ type: "append-digit", digit })} onDelete={() => dispatch({ type: "delete-digit" })} onClear={() => dispatch({ type: "clear-digits" })} onCall={() => void connect()} onRecent={() => { dispatch({ type: "select-boloride" }); void connect(DEMO_NUMBER); }}/>}
           {callScreens.includes(demo.screen) && <CallScreen key={demo.screen} state={demo.screen as CallScreenProps["state"]} volume={remoteVolume} onSpeaker={() => setPlaybackVolume(remoteVolume === 1 ? .5 : 1)} seconds={seconds} muted={muted} micStatus={connected ? muted ? "Microphone muted" : "Microphone active" : "Connecting your call…"} error={error} onMute={() => void toggleMute()} onEnd={endCall} onRetry={() => void connect(DEMO_NUMBER)} onHome={() => dispatch({ type: "home" })}/>} 
         </div>
+        {notificationBanner && <IphoneNotification notification={notificationBanner} onDismiss={() => setNotificationBanner(null)} />}
         {connected && controlsOpen && <CallControls volume={remoteVolume} onVolume={setPlaybackVolume} muted={muted} onMute={() => void toggleMute()} onClose={() => setControlsOpen(false)}/>}
         {demo.dialog && <InPhoneDialog kind={demo.dialog} onClose={() => dispatch({ type: "close-dialog" })}/>}
       </PremiumPhone>

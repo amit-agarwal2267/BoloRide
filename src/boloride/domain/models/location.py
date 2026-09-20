@@ -4,6 +4,7 @@ from enum import StrEnum
 from hashlib import sha256
 from math import asin, cos, radians, sin, sqrt
 import re
+import unicodedata
 
 from boloride.domain.exceptions import DomainValidationError
 
@@ -473,7 +474,14 @@ def _spherical_distance_meters(
 
 
 def normalized_location_text(value: str) -> str:
-    return " ".join(re.findall(r"[\w]+", value.casefold()))
+    # Python's \\w does not retain every Unicode combining mark used by Indic
+    # scripts. Preserve letters, numbers and marks so कोटा does not degrade to
+    # क ट before transliteration.
+    cleaned = "".join(
+        char if unicodedata.category(char)[0] in {"L", "N", "M"} else " "
+        for char in value.casefold()
+    )
+    return " ".join(cleaned.split())
 
 
 def geography_values_equivalent(left: str | None, right: str | None) -> bool:
@@ -542,9 +550,17 @@ def _indic_to_latin_key(value: str) -> str:
             if pending_consonant:
                 result.append("a")
                 pending_consonant = False
+    terminal_inherent_schwa = pending_consonant
     if pending_consonant:
         result.append("a")
-    return re.sub(r"[^a-z0-9]+", "", "".join(result)).replace("aa", "a").replace("ii", "i").replace("uu", "u")
+    key = re.sub(r"[^a-z0-9]+", "", "".join(result)).replace("aa", "a").replace("ii", "i").replace("uu", "u")
+    # Hindi commonly drops a final *inherent* schwa in Latin spellings.
+    # Preserve an explicit final vowel matra (कोटा -> kota), while allowing
+    # राजस्थान -> rajasthana -> rajasthan. This is a script rule, not a
+    # city/state dictionary.
+    if terminal_inherent_schwa and key.endswith("a"):
+        key = key[:-1]
+    return key
 
 
 _normalized_location_text = normalized_location_text

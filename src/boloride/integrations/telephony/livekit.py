@@ -310,10 +310,9 @@ async def play_deterministic_welcome(
         name = persona.spoken_name or persona.display_name
         if customer_name:
             welcome = (
-                f"नमस्ते {customer_name} जी, BoloRide में आपका स्वागत है। "
-                f"मैं {name} बोल रही हूँ।"
+                f"नमस्ते, BoloRide में आपका स्वागत है। मैं {name} बोल रही हूँ।"
                 if persona.gender.value == "female"
-                else f"नमस्ते {customer_name} जी, BoloRide में आपका स्वागत है। मैं {name} बोल रहा हूँ।"
+                else f"नमस्ते, BoloRide में आपका स्वागत है। मैं {name} बोल रहा हूँ।"
             )
         else:
             welcome = persona.welcome

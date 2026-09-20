@@ -127,6 +127,9 @@ describe("simulated phone experience", () => {
     await advance(SIMULATED_CONNECTION_MS);
     const base = { sender: "BR24IC42" as const, ride_id: "ride-123", timestamp: "2026-09-14T14:00:00Z" };
     act(() => transport.emit({ notification_id: "n1", type: "ride_booked", ...base, payload: { source: "Home", destination: "Station", estimated_fare: "INR 200", driver_name: "Amit", vehicle_number: "RJ 20 AB 1234", eta: "5 min" } }));
+    expect(screen.getByRole("status", { name: "BoloRide notification" })).toHaveTextContent("Your BoloRide is booked.");
+    await advance(5000);
+    expect(screen.queryByRole("status", { name: "BoloRide notification" })).not.toBeInTheDocument();
     act(() => transport.emit({ notification_id: "n2", type: "ride_cancelled", ...base, timestamp: "2026-09-14T14:05:00Z", payload: { source: "Home", destination: "Station", booking_time: "2026-09-14T14:00:00Z", cancellation_time: "2026-09-14T14:05:00Z" } }));
     click("End Call"); click(/Home/);
     expect(screen.getByText("2")).toHaveClass("unread-badge");
