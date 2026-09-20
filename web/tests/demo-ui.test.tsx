@@ -4,6 +4,12 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Home from "../app/page";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn(), back: vi.fn(), forward: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(),
+}));
 import PhoneDemo from "../components/PhoneDemo";
 import { PhoneClock, useClock } from "../components/PhoneClock";
 import { SIMULATED_CONNECTION_MS, SimulatedCallTransport, type RideNotification } from "../lib/call-transport";
