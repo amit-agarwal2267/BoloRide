@@ -2077,6 +2077,36 @@ class BoloRideAgent(Agent):
             missing.append("precise_pickup")
         if self.ride_context.destination is None:
             missing.append("resolved_destination")
+        geography_conflicts = []
+        for role, location in (
+            ("pickup", self.ride_context.pickup),
+            ("destination", self.ride_context.destination),
+        ):
+            if location is None:
+                continue
+            expected_city, expected_state = self.ride_context.endpoint_geography(role)
+            if (
+                expected_city
+                and location.city
+                and expected_city.casefold() != location.city.casefold()
+            ):
+                geography_conflicts.append(role)
+                continue
+            if (
+                expected_state
+                and location.state
+                and expected_state.casefold() != location.state.casefold()
+            ):
+                geography_conflicts.append(role)
+        if geography_conflicts:
+            self.ride_context.current_quote = None
+            self.ride_context.confirmed_quote_id = None
+            self.ride_context.user_confirmed = False
+            return json.dumps({
+                "status": "quote_location_validation_failed",
+                "invalid_locations": geography_conflicts,
+                "instruction": "Re-resolve each invalid endpoint before quoting.",
+            })
         if self.ride_context.ride_time is None:
             missing.append("resolved_scheduled_time")
         if self.ride_context.selected_vehicle_type_code is None:
