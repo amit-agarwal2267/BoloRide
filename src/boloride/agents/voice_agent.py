@@ -830,9 +830,22 @@ class BoloRideAgent(Agent):
         )
         if existing is not None and not correction:
             if role == "pickup" and self.ride_context.pickup_precision_sufficient is False:
+                depth = self.ride_context.record_location_refinement(
+                    role, existing.display_name or existing.address
+                )
+                if depth >= 4:
+                    return json.dumps({
+                        "status": "location_recovery_required",
+                        "location_role": role,
+                        "refinement_depth": depth,
+                        "instruction": "Stop repeated narrowing. Offer the best resolved anchor for explicit confirmation or ask the caller to replace it with a clearly different location.",
+                    })
                 return json.dumps({
-                    "status": "precise_pickup_required",
-                    "instruction": "The current pickup is too broad. Ask for a landmark, building, society, station, or specific POI, then call search_locations again for pickup with correction=true.",
+                    "status": "location_refinement_required",
+                    "location_role": role,
+                    "anchor": existing.display_name or existing.address,
+                    "refinement_depth": depth,
+                    "instruction": "Ask where inside the current area. Use the caller's new detail as a refinement of this anchor; if it is geographically incompatible, ask which location they actually want.",
                 })
             logger.info(
                 "location_resolved_reuse",
@@ -985,16 +998,20 @@ class BoloRideAgent(Agent):
             )
             return json.dumps({"status": "stale_location_result_ignored"})
         if result.status is LocationResolutionStatus.RESOLVED and result.location:
-            if role == "destination" and context_city and result.location.city and result.location.city.casefold() != context_city.casefold():
+            if context_city and result.location.city and result.location.city.casefold() != context_city.casefold():
                 self._record_clarification("location", location=True)
                 return json.dumps({
-                    "status": "location_clarification_required",
+                    "status": "location_contradiction_detected",
                     "location_role": role,
-                    "reason": "resolved_candidate_outside_explicit_geography",
-                    "instruction": f"The result is outside {context_city}. Keep {context_city} as the destination geography and ask for a more specific place there.",
+                    "anchor_city": context_city,
+                    "candidate_city": result.location.city,
+                    "instruction": "The new location is outside the established geography. Ask the caller which one they intend to use. If they choose the new location, treat it as a correction and reset the refinement chain.",
                 })
             selected, changed = await self._store_resolved_location(
                 role, result.location, correction=correction
+            )
+            self.ride_context.reset_location_refinement(
+                role, selected.display_name or selected.address
             )
             action = "Selected" if changed else "Reused"
             return f"{action} {role}: {selected.display_name or selected.address}."
@@ -1028,15 +1045,23 @@ class BoloRideAgent(Agent):
         if result.status is LocationResolutionStatus.NOT_FOUND:
             self._record_clarification("location", location=True)
             attempts = self.ride_context.record_location_clarification(role)
+            depth = self.ride_context.record_location_refinement(
+                role, self.ride_context.location_anchor_text(role) or query
+            )
+            if depth >= 4:
+                return json.dumps({
+                    "status": "location_recovery_required",
+                    "location_role": role,
+                    "refinement_depth": depth,
+                    "instruction": "Do not ask for another incremental refinement. Offer the best known anchor for explicit confirmation, or ask the caller to replace it with a clearly different location.",
+                })
             return json.dumps(
                 {
                     "status": "location_clarification_required",
                     "recovery_level": min(attempts, 2),
-                    "instruction": (
-                        "Ask for the city once more."
-                        if attempts == 1
-                        else "Ask for a nearby landmark."
-                    ),
+                    "refinement_depth": depth,
+                    "anchor": self.ride_context.location_anchor_text(role),
+                    "instruction": "Ask for one additional useful geographic detail such as a nearby landmark, building, station, road, locality, or corrected city/state.",
                 }
             )
         if not result.candidates:
@@ -1086,6 +1111,9 @@ class BoloRideAgent(Agent):
             location = await self._locations.resolve_candidate(candidate)
             self.ride_context.clear_pending_location_candidate(role)
             self._set_location(role, location)
+            self.ride_context.reset_location_refinement(
+                role, location.display_name or location.address
+            )
             logger.info(
                 "location_candidate_confirmed",
                 extra={
@@ -1120,6 +1148,9 @@ class BoloRideAgent(Agent):
                 candidates[candidate_number - 1]
             )
             self._set_location(role, location)
+            self.ride_context.reset_location_refinement(
+                role, location.display_name or location.address
+            )
             self.ride_context.clear_location_candidates()
         return f"Selected {role}: {location.display_name or location.address}."
 
