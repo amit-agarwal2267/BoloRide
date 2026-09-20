@@ -544,7 +544,13 @@ def _indic_to_latin_key(value: str) -> str:
                 pending_consonant = False
     if pending_consonant:
         result.append("a")
-    return re.sub(r"[^a-z0-9]+", "", "".join(result)).replace("aa", "a").replace("ii", "i").replace("uu", "u")
+    key = re.sub(r"[^a-z0-9]+", "", "".join(result)).replace("aa", "a").replace("ii", "i").replace("uu", "u")
+    # Hindi commonly drops the final inherent schwa in Latin spellings:
+    # राजस्थान -> rajasthana -> rajasthan. Apply this as a script rule,
+    # not a city/state dictionary.
+    if value and not value[-1].isascii() and key.endswith("a"):
+        key = key[:-1]
+    return key
 
 
 _normalized_location_text = normalized_location_text
