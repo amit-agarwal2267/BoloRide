@@ -69,7 +69,7 @@ async def test_returning_customer_welcome_uses_persisted_name_without_llm():
     ) is True
 
     session.say.assert_called_once_with(
-        "नमस्ते Kabir Shah जी, BoloRide में आपका स्वागत है। मैं Aditi बोल रही हूँ।",
+        "नमस्ते, BoloRide में आपका स्वागत है। मैं Aditi बोल रही हूँ।",
         allow_interruptions=False,
         add_to_chat_ctx=True,
     )
