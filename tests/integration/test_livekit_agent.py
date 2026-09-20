@@ -1955,3 +1955,37 @@ async def test_destination_contradiction_uses_same_resolution_policy_as_pickup()
     assert result["status"] == "location_contradiction_detected"
     assert result["location_role"] == "destination"
     assert context.destination is None
+
+
+
+@pytest.mark.asyncio
+async def test_hindi_anchor_and_english_provider_city_are_not_contradiction() -> None:
+    agent, context, _ = make_agent()
+    agent._locations.resolve_query = AsyncMock(
+        return_value=SimpleNamespace(
+            status=LocationResolutionStatus.RESOLVED,
+            location=ResolvedLocation(
+                "Kota Railway Station, Kota, Rajasthan",
+                Decimal("25.223"),
+                Decimal("75.880"),
+                display_name="Kota Railway Station",
+                city="Kota",
+                state="Rajasthan",
+                place_types=("train_station",),
+            ),
+            provider="google",
+            fallback_used=False,
+            candidates=(),
+        )
+    )
+
+    result = await agent.search_locations(
+        "कोटा जंक्शन",
+        "destination",
+        explicit_city="कोटा",
+        explicit_state="राजस्थान",
+    )
+
+    assert result.startswith("Selected destination")
+    assert context.destination is not None
+    assert context.destination.city == "Kota"

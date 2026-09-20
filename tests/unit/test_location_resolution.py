@@ -13,6 +13,7 @@ from boloride.domain.models.location import (
     LocationSearchContext,
     LocationResolutionStatus,
     deduplicate_location_candidates,
+    geography_values_equivalent,
 )
 from boloride.integrations.maps.google_maps import GoogleMapsProvider, contextual_query
 from boloride.integrations.maps.router import MapsRouter
@@ -470,3 +471,92 @@ def test_nearby_distinct_platforms_are_not_collapsed() -> None:
     distinct = deduplicate_location_candidates([first, second])
 
     assert len(distinct) == 2
+
+
+
+def test_multilingual_geography_equivalence_without_city_dictionary() -> None:
+    assert geography_values_equivalent("कोटा", "Kota")
+    assert geography_values_equivalent("राजस्थान", "Rajasthan")
+    assert not geography_values_equivalent("कोटा", "Jaipur")
+
+
+@pytest.mark.asyncio
+async def test_explicit_geography_filters_out_provider_results_from_other_city() -> None:
+    in_city = LocationCandidate(
+        "Silicon City",
+        "Silicon City, Kunadi, Kota, Rajasthan",
+        Decimal("25.2300"),
+        Decimal("75.8500"),
+        "google",
+        "kota-silicon",
+        city="Kota",
+        state="Rajasthan",
+        place_types=("establishment",),
+    )
+    outside = LocationCandidate(
+        "B Silicon City",
+        "B Silicon City, Girdharpura, Jaipur, Rajasthan",
+        Decimal("26.9000"),
+        Decimal("75.7000"),
+        "ola",
+        "wrong-city",
+        city="Jaipur",
+        state="Rajasthan",
+        place_types=("establishment",),
+    )
+
+    class Provider:
+        def __init__(self, name):
+            self.provider_name = name
+
+        async def enrich_candidate(self, candidate):
+            return candidate
+
+    class Router:
+        async def search_location(self, query, context):
+            return [outside, in_city], "ola+google", False, False
+
+        def get_search_providers(self):
+            return [Provider("ola"), Provider("google")]
+
+        def get_provider(self):
+            return Provider("google")
+
+    result = await LocationService(Router()).resolve_query(  # type: ignore[arg-type]
+        "Silicon City",
+        city="Kota",
+        state="Rajasthan",
+        explicit_geography_present=True,
+    )
+
+    assert result.status is LocationResolutionStatus.RESOLVED
+    assert result.location is not None
+    assert result.location.provider_place_id == "kota-silicon"
+
+
+def test_same_parent_poi_collapses_across_address_wording() -> None:
+    first = LocationCandidate(
+        "Kota Railway Station",
+        "Kota Railway Station, Tilak Nagar, Kota, Rajasthan",
+        Decimal("25.2230"),
+        Decimal("75.8800"),
+        "ola",
+        "ola-kota-station",
+        city="Kota",
+        state="Rajasthan",
+        place_types=("train_station",),
+    )
+    second = LocationCandidate(
+        "Kota railways station",
+        "New Railway Colony, Kota, Rajasthan",
+        Decimal("25.2237"),
+        Decimal("75.8804"),
+        "google",
+        "google-kota-station",
+        city="Kota",
+        state="Rajasthan",
+        place_types=("train_station",),
+    )
+
+    collapsed = deduplicate_location_candidates([first, second])
+    assert len(collapsed) == 1

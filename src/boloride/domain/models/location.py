@@ -361,7 +361,16 @@ def _same_practical_place(
         return distance <= 40
     overlap = len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
     same_category = bool(set(left.place_types or ()) & set(right.place_types or ()))
-    return overlap >= 0.6 or (distance <= 80 and same_category)
+    transit_parent = bool(
+        {"train_station", "transit_station", "bus_station", "airport"}
+        & set(left.place_types or ())
+        & set(right.place_types or ())
+    )
+    return (
+        overlap >= 0.6
+        or (distance <= 80 and same_category)
+        or (distance <= 150 and transit_parent and overlap >= 0.25)
+    )
 
 
 _NAVIGATION_DISTINCTION_PATTERN = re.compile(
@@ -377,8 +386,7 @@ def _compatible_candidate_geography(
     return all(
         not left_value
         or not right_value
-        or _normalized_location_text(left_value)
-        == _normalized_location_text(right_value)
+        or geography_values_equivalent(left_value, right_value)
         for left_value, right_value in (
             (left.city, right.city),
             (left.state, right.state),
@@ -430,9 +438,7 @@ def _same_known_geography(
 ) -> bool:
     if not left.city or not right.city:
         return False
-    return _normalized_location_text(left.city) == _normalized_location_text(
-        right.city
-    )
+    return geography_values_equivalent(left.city, right.city)
 
 
 def _candidate_distance_meters(
@@ -466,5 +472,79 @@ def _spherical_distance_meters(
     return round(6_371_000 * 2 * asin(sqrt(min(1.0, value))))
 
 
-def _normalized_location_text(value: str) -> str:
+def normalized_location_text(value: str) -> str:
     return " ".join(re.findall(r"[\w]+", value.casefold()))
+
+
+def geography_values_equivalent(left: str | None, right: str | None) -> bool:
+    """Compare geography names across case/script using provider-backed transliteration hints."""
+    if not left or not right:
+        return True
+    left_normalized = normalized_location_text(left)
+    right_normalized = normalized_location_text(right)
+    if left_normalized == right_normalized:
+        return True
+
+    # Minimal generic Indic transliteration for geography comparison only. This
+    # avoids city-name dictionaries while allowing common Hindi/English forms
+    # such as कोटा/Kota and राजस्थान/Rajasthan to compare consistently.
+    left_latin = _indic_to_latin_key(left_normalized)
+    right_latin = _indic_to_latin_key(right_normalized)
+    return bool(left_latin and right_latin and left_latin == right_latin)
+
+
+def _indic_to_latin_key(value: str) -> str:
+    independent = {
+        "अ": "a", "आ": "aa", "इ": "i", "ई": "ii", "उ": "u", "ऊ": "uu",
+        "ए": "e", "ऐ": "ai", "ओ": "o", "औ": "au",
+    }
+    consonants = {
+        "क": "k", "ख": "kh", "ग": "g", "घ": "gh", "ङ": "ng",
+        "च": "ch", "छ": "chh", "ज": "j", "झ": "jh", "ञ": "ny",
+        "ट": "t", "ठ": "th", "ड": "d", "ढ": "dh", "ण": "n",
+        "त": "t", "थ": "th", "द": "d", "ध": "dh", "न": "n",
+        "प": "p", "फ": "ph", "ब": "b", "भ": "bh", "म": "m",
+        "य": "y", "र": "r", "ल": "l", "व": "v", "श": "sh", "ष": "sh",
+        "स": "s", "ह": "h", "क़": "q", "ख़": "kh", "ग़": "g", "ज़": "z",
+        "ड़": "d", "ढ़": "dh", "फ़": "f",
+    }
+    matras = {
+        "ा": "a", "ि": "i", "ी": "i", "ु": "u", "ू": "u",
+        "े": "e", "ै": "ai", "ो": "o", "ौ": "au", "ृ": "ri",
+    }
+    marks = {"ं": "n", "ँ": "n", "ः": "h"}
+    result: list[str] = []
+    pending_consonant = False
+    for char in value:
+        if char in consonants:
+            if pending_consonant:
+                result.append("a")
+            result.append(consonants[char])
+            pending_consonant = True
+        elif char in matras:
+            result.append(matras[char])
+            pending_consonant = False
+        elif char == "्":
+            pending_consonant = False
+        elif char in independent:
+            if pending_consonant:
+                result.append("a")
+                pending_consonant = False
+            result.append(independent[char])
+        elif char in marks:
+            result.append(marks[char])
+        elif char.isascii() and char.isalnum():
+            if pending_consonant:
+                result.append("a")
+                pending_consonant = False
+            result.append(char.casefold())
+        else:
+            if pending_consonant:
+                result.append("a")
+                pending_consonant = False
+    if pending_consonant:
+        result.append("a")
+    return re.sub(r"[^a-z0-9]+", "", "".join(result)).replace("aa", "a").replace("ii", "i").replace("uu", "u")
+
+
+_normalized_location_text = normalized_location_text

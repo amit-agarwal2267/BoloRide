@@ -23,6 +23,7 @@ from boloride.domain.exceptions import (
 )
 from boloride.domain.models.location import (
     LocationCandidate,
+    geography_values_equivalent,
     LocationContextSource,
     LocationResolutionStatus,
     ResolvedLocation,
@@ -999,7 +1000,7 @@ class BoloRideAgent(Agent):
             )
             return json.dumps({"status": "stale_location_result_ignored"})
         if result.status is LocationResolutionStatus.RESOLVED and result.location:
-            if context_city and result.location.city and result.location.city.casefold() != context_city.casefold():
+            if context_city and result.location.city and not geography_values_equivalent(result.location.city, context_city):
                 self._record_clarification("location", location=True)
                 return json.dumps({
                     "status": "location_contradiction_detected",

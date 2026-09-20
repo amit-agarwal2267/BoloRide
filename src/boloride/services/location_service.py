@@ -13,6 +13,7 @@ from boloride.domain.models.location import (
 	assess_route_sanity,
 	customer_location_label,
 	deduplicate_location_candidates,
+	geography_values_equivalent,
 	LocationClarificationReason,
 	LocationCandidate,
 	LocationResolutionResult,
@@ -98,6 +99,10 @@ class LocationService:
 		started_at = monotonic()
 		candidates, provider, fallback_used, unavailable = await self._router.search_location(normalized_query, context)
 		original_count = len(candidates)
+		if explicit_geography_present and (city or state):
+			candidates = _filter_candidates_to_explicit_geography(
+				candidates, city=city, state=state
+			)
 		provider_names = {candidate.provider for candidate in candidates}
 		consensus = _consensus_candidate(
 			candidates,
@@ -373,7 +378,7 @@ def _known_geography_agrees(
 	for field in ("city", "state", "country"):
 		left_value = getattr(left, field)
 		right_value = getattr(right, field)
-		if left_value and right_value and left_value.casefold() != right_value.casefold():
+		if left_value and right_value and not geography_values_equivalent(left_value, right_value):
 			return False
 	return True
 
@@ -389,9 +394,9 @@ def _consensus_candidate(
 	for index, left in enumerate(candidates):
 		if _candidate_query_coverage(left, query) < 0.5:
 			continue
-		if city and left.city and left.city.casefold() != city.casefold():
+		if city and left.city and not geography_values_equivalent(left.city, city):
 			continue
-		if state and left.state and left.state.casefold() != state.casefold():
+		if state and left.state and not geography_values_equivalent(left.state, state):
 			continue
 		for right in candidates[index + 1:]:
 			if left.provider == right.provider:
@@ -400,9 +405,9 @@ def _consensus_candidate(
 				continue
 			if not _known_geography_agrees(left, right):
 				continue
-			if city and right.city and right.city.casefold() != city.casefold():
+			if city and right.city and not geography_values_equivalent(right.city, city):
 				continue
-			if state and right.state and right.state.casefold() != state.casefold():
+			if state and right.state and not geography_values_equivalent(right.state, state):
 				continue
 			if (
 				_candidate_distance(left, right) <= 250
@@ -426,11 +431,28 @@ def _rank_location_candidates(
 	state: str | None,
 ) -> list[LocationCandidate]:
 	def score(candidate: LocationCandidate) -> tuple[float, int, int]:
-		geography = int(bool(city and candidate.city and city.casefold() == candidate.city.casefold()))
-		geography += int(bool(state and candidate.state and state.casefold() == candidate.state.casefold()))
+		geography = int(bool(city and candidate.city and geography_values_equivalent(city, candidate.city)))
+		geography += int(bool(state and candidate.state and geography_values_equivalent(state, candidate.state)))
 		return (
 			_candidate_query_coverage(candidate, query),
 			geography,
 			int(candidate.provider == "google"),
 		)
 	return sorted(candidates, key=score, reverse=True)
+
+
+def _filter_candidates_to_explicit_geography(
+	candidates: list[LocationCandidate],
+	*,
+	city: str | None,
+	state: str | None,
+) -> list[LocationCandidate]:
+	"""Drop provider results that contradict geography explicitly supplied by the caller."""
+	filtered: list[LocationCandidate] = []
+	for candidate in candidates:
+		if city and candidate.city and not geography_values_equivalent(candidate.city, city):
+			continue
+		if state and candidate.state and not geography_values_equivalent(candidate.state, state):
+			continue
+		filtered.append(candidate)
+	return filtered
