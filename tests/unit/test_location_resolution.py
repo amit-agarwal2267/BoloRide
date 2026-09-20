@@ -8,8 +8,12 @@ from boloride.domain.exceptions import (
     LocationConfigurationError,
     LocationNotFoundError,
 )
-from boloride.domain.models.location import LocationCandidate, LocationSearchContext
-from boloride.domain.models.location import LocationResolutionStatus
+from boloride.domain.models.location import (
+    LocationCandidate,
+    LocationSearchContext,
+    LocationResolutionStatus,
+    deduplicate_location_candidates,
+)
 from boloride.integrations.maps.google_maps import GoogleMapsProvider, contextual_query
 from boloride.integrations.maps.router import MapsRouter
 from boloride.services.location_service import LocationService
