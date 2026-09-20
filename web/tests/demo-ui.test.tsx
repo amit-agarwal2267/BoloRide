@@ -76,8 +76,9 @@ describe("simulated phone experience", () => {
     const view = render(<Home/>);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("A system");
     expect(screen.queryByTestId("lock-screen")).not.toBeInTheDocument();
-    const demoLinks = screen.getAllByRole("link").filter(link => link.getAttribute("href") === "/demo");
-    expect(demoLinks).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "Try the call" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Call BoloRide/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open the phone demo/i })).toBeInTheDocument();
     view.unmount(); render(<PhoneDemo/>);
     expect(screen.getByTestId("lock-screen")).toBeInTheDocument();
   });
