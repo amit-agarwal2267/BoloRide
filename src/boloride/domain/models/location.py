@@ -4,6 +4,7 @@ from enum import StrEnum
 from hashlib import sha256
 from math import asin, cos, radians, sin, sqrt
 import re
+import unicodedata
 
 from boloride.domain.exceptions import DomainValidationError
 
@@ -473,7 +474,14 @@ def _spherical_distance_meters(
 
 
 def normalized_location_text(value: str) -> str:
-    return " ".join(re.findall(r"[\w]+", value.casefold()))
+    # Python's \\w does not retain every Unicode combining mark used by Indic
+    # scripts. Preserve letters, numbers and marks so कोटा does not degrade to
+    # क ट before transliteration.
+    cleaned = "".join(
+        char if unicodedata.category(char)[0] in {"L", "N", "M"} else " "
+        for char in value.casefold()
+    )
+    return " ".join(cleaned.split())
 
 
 def geography_values_equivalent(left: str | None, right: str | None) -> bool:
