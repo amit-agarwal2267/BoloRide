@@ -3,6 +3,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
 from time import perf_counter
 from typing import AsyncIterator, Awaitable, Callable, Literal, TypeVar
 from uuid import UUID, uuid4
