@@ -798,6 +798,21 @@ async def test_cancellation_uses_natural_reference_and_internal_target() -> None
 
 
 @pytest.mark.asyncio
+async def test_cancellation_candidate_number_without_authoritative_list_falls_back_to_resolution() -> None:
+    agent, context, _ = make_agent()
+    details = ride_details()
+    agent._ride_service.resolve_customer_ride_reference.return_value = (
+        RideReferenceResolution(RideReferenceResolutionStatus.RESOLVED, details)
+    )
+
+    selected = await agent.select_ride_for_cancellation(candidate_number=1)
+
+    assert context.cancellation_target_ride_id == details.ride_id
+    assert "Selected" in selected
+    agent._ride_service.resolve_customer_ride_reference.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_parallel_location_searches_serialize_shared_session_lookup() -> None:
     agent, _, _ = make_agent()
     active = 0
