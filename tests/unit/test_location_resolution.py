@@ -8,8 +8,12 @@ from boloride.domain.exceptions import (
     LocationConfigurationError,
     LocationNotFoundError,
 )
-from boloride.domain.models.location import LocationCandidate, LocationSearchContext
-from boloride.domain.models.location import LocationResolutionStatus
+from boloride.domain.models.location import (
+    LocationCandidate,
+    LocationSearchContext,
+    LocationResolutionStatus,
+    deduplicate_location_candidates,
+)
 from boloride.integrations.maps.google_maps import GoogleMapsProvider, contextual_query
 from boloride.integrations.maps.router import MapsRouter
 from boloride.services.location_service import LocationService
@@ -408,3 +412,61 @@ def test_candidate_requires_valid_coordinates() -> None:
             longitude=Decimal("75"),
             provider="test",
         )
+
+
+def test_nearby_equivalent_provider_results_collapse_to_one_place() -> None:
+    first = LocationCandidate(
+        "Central Junction Railway Station",
+        "Central Junction, Sample City",
+        Decimal("12.97160"),
+        Decimal("77.59460"),
+        "ola",
+        "ola-central",
+        city="Sample City",
+        state="Sample State",
+        place_types=("train_station",),
+    )
+    second = LocationCandidate(
+        "Central Railway Station",
+        "Central Junction, Sample City",
+        Decimal("12.97175"),
+        Decimal("77.59475"),
+        "google",
+        "google-central",
+        city="Sample City",
+        state="Sample State",
+        place_types=("train_station",),
+    )
+
+    collapsed = deduplicate_location_candidates([first, second])
+
+    assert len(collapsed) == 1
+
+
+def test_nearby_distinct_platforms_are_not_collapsed() -> None:
+    first = LocationCandidate(
+        "Central Junction Platform 1",
+        "Platform 1, Central Junction, Sample City",
+        Decimal("12.97160"),
+        Decimal("77.59460"),
+        "ola",
+        "ola-platform-1",
+        city="Sample City",
+        state="Sample State",
+        place_types=("train_station",),
+    )
+    second = LocationCandidate(
+        "Central Junction Platform 4",
+        "Platform 4, Central Junction, Sample City",
+        Decimal("12.97172"),
+        Decimal("77.59472"),
+        "google",
+        "google-platform-4",
+        city="Sample City",
+        state="Sample State",
+        place_types=("train_station",),
+    )
+
+    distinct = deduplicate_location_candidates([first, second])
+
+    assert len(distinct) == 2

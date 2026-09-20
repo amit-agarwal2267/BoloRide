@@ -14,7 +14,18 @@ from boloride.integrations.maps.router import MapsRouter
 
 
 def candidate(name: str, *, state: str = "Rajasthan", provider: str = "ola") -> LocationCandidate:
-    return LocationCandidate(name, f"{name}, India", Decimal("25"), Decimal("75"), provider, f"id-{name}", city="Kota", state=state, country="India")
+    offset = Decimal(str((ord(name[0]) - 65) * 0.01 if name else 0))
+    return LocationCandidate(
+        name,
+        f"{name}, India",
+        Decimal("25") + offset,
+        Decimal("75") + offset,
+        provider,
+        f"id-{name}",
+        city="Kota",
+        state=state,
+        country="India",
+    )
 
 
 class Router:
@@ -77,7 +88,7 @@ async def test_no_result_and_provider_unavailable_are_distinct():
 
 @pytest.mark.asyncio
 async def test_context_radius_is_configuration_at_service_boundary():
-    router = Router([candidate("A"), candidate("B")])
+    router = Router([candidate("A"), candidate("B"), candidate("C")])
     await LocationService(router, urban_radius_meters=1234).resolve_query("station", city="Kota")
     assert router.context.radius_meters == 1234
 

@@ -340,15 +340,41 @@ def assess_route_sanity(
 def _same_practical_place(
     left: LocationCandidate, right: LocationCandidate
 ) -> bool:
+    """Collapse provider duplicates without erasing meaningful navigation sub-locations."""
     if (
         left.provider == right.provider
         and left.provider_place_id
         and left.provider_place_id == right.provider_place_id
     ):
         return True
-    if _candidate_distance_meters(left, right) > 30:
+    distance = _candidate_distance_meters(left, right)
+    if distance > 250:
         return False
-    same_geography = all(
+    if not _compatible_candidate_geography(left, right):
+        return False
+    if _meaningfully_distinct_sub_location(left, right):
+        return False
+
+    left_tokens = _semantic_place_tokens(left)
+    right_tokens = _semantic_place_tokens(right)
+    if not left_tokens or not right_tokens:
+        return distance <= 40
+    overlap = len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
+    same_category = bool(set(left.place_types or ()) & set(right.place_types or ()))
+    return overlap >= 0.6 or (distance <= 80 and same_category)
+
+
+_NAVIGATION_DISTINCTION_PATTERN = re.compile(
+    r"\b(?:platform|gate|terminal|entrance|entry|exit|tower|block|wing|building|"
+    r"arrival|departure|parking)\s*[-:#]?\s*([a-z0-9]+)\b",
+    re.IGNORECASE,
+)
+
+
+def _compatible_candidate_geography(
+    left: LocationCandidate, right: LocationCandidate
+) -> bool:
+    return all(
         not left_value
         or not right_value
         or _normalized_location_text(left_value)
@@ -359,13 +385,44 @@ def _same_practical_place(
             (left.country, right.country),
         )
     )
-    same_text = (
-        _normalized_location_text(left.display_name)
-        == _normalized_location_text(right.display_name)
-        or _normalized_location_text(left.formatted_address)
-        == _normalized_location_text(right.formatted_address)
+
+
+def _meaningfully_distinct_sub_location(
+    left: LocationCandidate, right: LocationCandidate
+) -> bool:
+    left_text = f"{left.display_name} {left.formatted_address}"
+    right_text = f"{right.display_name} {right.formatted_address}"
+    left_markers = {
+        (match.group(0).split()[0].casefold(), match.group(1).casefold())
+        for match in _NAVIGATION_DISTINCTION_PATTERN.finditer(left_text)
+    }
+    right_markers = {
+        (match.group(0).split()[0].casefold(), match.group(1).casefold())
+        for match in _NAVIGATION_DISTINCTION_PATTERN.finditer(right_text)
+    }
+    if not left_markers or not right_markers:
+        return False
+    left_by_kind = dict(left_markers)
+    right_by_kind = dict(right_markers)
+    return any(
+        kind in right_by_kind and right_by_kind[kind] != value
+        for kind, value in left_by_kind.items()
     )
-    return same_geography and same_text
+
+
+def _semantic_place_tokens(candidate: LocationCandidate) -> set[str]:
+    ignored = {
+        "railway", "rail", "station", "junction", "jn", "road", "rd", "street",
+        "st", "the", "near", "at", "in", "india",
+    }
+    return {
+        token
+        for token in re.findall(
+            r"[\w]+",
+            f"{candidate.display_name} {candidate.formatted_address}".casefold(),
+        )
+        if len(token) > 1 and token not in ignored
+    }
 
 
 def _same_known_geography(

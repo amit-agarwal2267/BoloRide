@@ -201,7 +201,7 @@ async def test_maps_records_only_real_provider_attempts_and_fallback() -> None:
     )
 
     assert len(candidates) == 1
-    assert (provider, fallback, unavailable) == ("google", True, False)
+    assert (provider, fallback, unavailable) == ("google", False, False)
     assert context.names == ["provider.ola", "provider.google"]
     first = context.observations[0].updates[0]["metadata"]
     second = context.observations[1].updates[0]["metadata"]

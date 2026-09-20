@@ -56,6 +56,10 @@ class RideContext:
 	destination_location_operation: int = 0
 	pickup_clarification_count: int = 0
 	destination_clarification_count: int = 0
+	pickup_refinement_depth: int = 0
+	destination_refinement_depth: int = 0
+	pickup_anchor_text: str | None = None
+	destination_anchor_text: str | None = None
 	ride_reference_candidates: tuple[UUID, ...] = ()
 	ride_reference_purpose: str | None = None
 	guardrail_block_count: int = 0
@@ -218,6 +222,8 @@ class RideContext:
 				self.pickup_geography_state = None
 			self.remember_endpoint_geography("pickup", pickup.city, pickup.state)
 			self.pickup_clarification_count = 0
+			if precision_sufficient is not False:
+				self.reset_location_refinement("pickup", pickup.display_name or pickup.address)
 
 	def update_destination(self, destination: ResolvedLocation | None) -> None:
 		if self.destination != destination:
@@ -236,6 +242,7 @@ class RideContext:
 				"destination", destination.city, destination.state
 			)
 			self.destination_clarification_count = 0
+			self.reset_location_refinement("destination", destination.display_name or destination.address)
 
 	def set_route(self, route: RouteResult) -> None:
 		self.route = route
@@ -380,6 +387,51 @@ class RideContext:
 		if role not in {"pickup", "destination"}:
 			raise DomainValidationError("location role must be pickup or destination")
 		return current == value
+
+	def record_location_refinement(self, role: str, anchor_text: str | None = None) -> int:
+		if role not in {"pickup", "destination"}:
+			raise DomainValidationError("location role must be pickup or destination")
+		field_name = (
+			"pickup_refinement_depth"
+			if role == "pickup"
+			else "destination_refinement_depth"
+		)
+		value = getattr(self, field_name) + 1
+		setattr(self, field_name, value)
+		if anchor_text is not None:
+			anchor_field = (
+				"pickup_anchor_text" if role == "pickup" else "destination_anchor_text"
+			)
+			setattr(self, anchor_field, " ".join(anchor_text.split()) or None)
+		return value
+
+	def reset_location_refinement(self, role: str, anchor_text: str | None = None) -> None:
+		if role not in {"pickup", "destination"}:
+			raise DomainValidationError("location role must be pickup or destination")
+		setattr(
+			self,
+			"pickup_refinement_depth" if role == "pickup" else "destination_refinement_depth",
+			0,
+		)
+		setattr(
+			self,
+			"pickup_anchor_text" if role == "pickup" else "destination_anchor_text",
+			" ".join(anchor_text.split()) if anchor_text else None,
+		)
+
+	def location_refinement_depth(self, role: str) -> int:
+		if role == "pickup":
+			return self.pickup_refinement_depth
+		if role == "destination":
+			return self.destination_refinement_depth
+		raise DomainValidationError("location role must be pickup or destination")
+
+	def location_anchor_text(self, role: str) -> str | None:
+		if role == "pickup":
+			return self.pickup_anchor_text
+		if role == "destination":
+			return self.destination_anchor_text
+		raise DomainValidationError("location role must be pickup or destination")
 
 	def record_location_clarification(self, role: str) -> int:
 		field_name = (

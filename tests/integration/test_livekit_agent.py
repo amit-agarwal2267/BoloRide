@@ -1041,9 +1041,11 @@ async def test_repeated_location_failure_escalates_to_landmark_without_provider_
     second = json.loads(await agent.search_locations("Unknown place", "pickup"))
 
     assert first["recovery_level"] == 1
-    assert first["instruction"] == "Ask for the city once more."
+    assert first["refinement_depth"] == 1
+    assert "additional useful geographic detail" in first["instruction"]
     assert second["recovery_level"] == 2
-    assert second["instruction"] == "Ask for a nearby landmark."
+    assert second["refinement_depth"] == 2
+    assert "additional useful geographic detail" in second["instruction"]
     assert "google" not in json.dumps(second).casefold()
 
 
@@ -1074,7 +1076,7 @@ def test_conversation_contract_is_short_turn_language_and_confirmation_aware() -
 
     # Location clarification managed prompt.
     assert (
-        "ask only which city the ride starts in"
+        "same progressive geographic narrowing policy"
         in instructions
     )
     assert (
@@ -1082,8 +1084,7 @@ def test_conversation_contract_is_short_turn_language_and_confirmation_aware() -
         in instructions
     )
     assert (
-        "Pickup geography provides context "
-        "but does not constrain the destination"
+        "Preserve explicit intercity destination geography"
         in instructions
     )
 
@@ -1571,8 +1572,9 @@ async def test_broad_pickup_requires_refinement_search_instead_of_reuse() -> Non
 
     result = json.loads(await agent.search_locations("Malad", "pickup"))
 
-    assert result["status"] == "precise_pickup_required"
-    assert "correction=true" in result["instruction"]
+    assert result["status"] == "location_refinement_required"
+    assert result["location_role"] == "pickup"
+    assert result["refinement_depth"] == 1
     agent._locations.resolve_query.assert_not_awaited()
 
 
@@ -1605,8 +1607,9 @@ async def test_destination_result_outside_explicit_city_is_rejected() -> None:
         )
     )
 
-    assert result["status"] == "location_clarification_required"
-    assert result["reason"] == "resolved_candidate_outside_explicit_geography"
+    assert result["status"] == "location_contradiction_detected"
+    assert result["anchor_city"] == "Pune"
+    assert result["candidate_city"] == "Mumbai"
     assert context.destination is None
 
 
@@ -1892,3 +1895,63 @@ async def test_explicit_multi_ride_cancellation_uses_one_set_confirmation() -> N
     assert processed["status"] == "cancellation_set_processed"
     assert any("not_cancellable" in value for value in processed["outcomes"])
     assert all(str(item.ride_id) not in processed["outcomes"] for item in (first, second))
+
+
+@pytest.mark.asyncio
+async def test_location_refinement_stops_after_four_iterations() -> None:
+    agent, context, _ = make_agent()
+    context.update_pickup(
+        ResolvedLocation(
+            "Broad Area",
+            Decimal("19.18"),
+            Decimal("72.84"),
+            city="Sample City",
+            place_types=("locality",),
+        ),
+        precision_sufficient=False,
+    )
+
+    first = json.loads(await agent.search_locations("Broad Area", "pickup"))
+    second = json.loads(await agent.search_locations("Broad Area", "pickup"))
+    third = json.loads(await agent.search_locations("Broad Area", "pickup"))
+    fourth = json.loads(await agent.search_locations("Broad Area", "pickup"))
+
+    assert first["status"] == "location_refinement_required"
+    assert second["refinement_depth"] == 2
+    assert third["refinement_depth"] == 3
+    assert fourth["status"] == "location_recovery_required"
+    assert fourth["refinement_depth"] == 4
+
+
+@pytest.mark.asyncio
+async def test_destination_contradiction_uses_same_resolution_policy_as_pickup() -> None:
+    agent, context, _ = make_agent()
+    context.remember_endpoint_geography("destination", "Anchor City", "Anchor State")
+    agent._locations.resolve_query = AsyncMock(
+        return_value=SimpleNamespace(
+            status=LocationResolutionStatus.RESOLVED,
+            location=ResolvedLocation(
+                "Different City Center",
+                Decimal("12.9"),
+                Decimal("77.6"),
+                city="Different City",
+                state="Different State",
+                place_types=("point_of_interest",),
+            ),
+            provider="google",
+            fallback_used=False,
+            candidates=(),
+        )
+    )
+
+    result = json.loads(
+        await agent.search_locations(
+            "Different City Center",
+            "destination",
+            explicit_city="Anchor City",
+        )
+    )
+
+    assert result["status"] == "location_contradiction_detected"
+    assert result["location_role"] == "destination"
+    assert context.destination is None

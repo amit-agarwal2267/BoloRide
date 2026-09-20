@@ -307,11 +307,16 @@ async def play_deterministic_welcome(
     """Speak the fixed welcome once, with caller audio disabled and no LLM call."""
     logger.info("deterministic_welcome_started", extra={"event": "deterministic_welcome_started", "session_id": session_id, "gender": persona.gender.value})
     try:
-        welcome = (
-            f"नमस्ते {customer_name} जी, BoloRide में आपका स्वागत है।"
-            if customer_name
-            else persona.welcome
-        )
+        name = persona.spoken_name or persona.display_name
+        if customer_name:
+            welcome = (
+                f"नमस्ते {customer_name} जी, BoloRide में आपका स्वागत है। "
+                f"मैं {name} बोल रही हूँ।"
+                if persona.gender.value == "female"
+                else f"नमस्ते {customer_name} जी, BoloRide में आपका स्वागत है। मैं {name} बोल रहा हूँ।"
+            )
+        else:
+            welcome = persona.welcome
         handle = session.say(welcome, allow_interruptions=False, add_to_chat_ctx=True)
         await handle.wait_for_playout()
     except Exception:
