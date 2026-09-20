@@ -23,7 +23,7 @@ function toHttpUrl(websocketUrl: string): string {
   throw new Error("LIVEKIT_URL must be a WebSocket URL");
 }
 
-export async function issueDemoToken(environment: TokenEnvironment) {
+export async function issueDemoToken(environment: TokenEnvironment, demoPhone?: string) {
   const internalUrl = environment.LIVEKIT_URL;
   const httpUrl = environment.LIVEKIT_HTTP_URL;
   const browserUrl = environment.LIVEKIT_BROWSER_URL;
@@ -83,6 +83,7 @@ export async function issueDemoToken(environment: TokenEnvironment) {
         client: "boloride-web-demo",
         mode: "microphone",
         transport: "browser",
+        ...(demoPhone ? { phone_number: demoPhone } : {}),
       }),
     });
 

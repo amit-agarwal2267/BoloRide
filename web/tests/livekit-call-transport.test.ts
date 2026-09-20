@@ -44,7 +44,7 @@ describe("LiveKitCallTransport", () => {
     rooms.length = 0;
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,
-      json: async () => ({ serverUrl: "wss://livekit.test", participantToken: "test-token" }),
+      json: async () => ({ serverUrl: "wss://livekit.test", participantToken: "test-token", callId: "call-123" }),
     })));
   });
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ""; });
@@ -70,6 +70,26 @@ describe("LiveKitCallTransport", () => {
     expect(room.localParticipant.setMicrophoneEnabled).toHaveBeenLastCalledWith(false);
     room.emit(roomEvents.TrackUnsubscribed, track);
     expect(document.body.contains(element)).toBe(false);
+  });
+
+  it("releases the leased caller number when the call disconnects", async () => {
+    const transport = new LiveKitCallTransport();
+    const connecting = transport.connect(new AbortController().signal);
+    await vi.waitFor(() => expect(rooms).toHaveLength(1));
+    const room = rooms[0];
+    await vi.waitFor(() => expect(room.connect).toHaveBeenCalled());
+    room.emit(roomEvents.ParticipantConnected);
+    await connecting;
+
+    await transport.disconnect();
+
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/demo-phone",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ action: "end", call_id: "call-123" }),
+      }),
+    );
   });
 
   it("delivers only valid BoloRide backend notifications", async () => {

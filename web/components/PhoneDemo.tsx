@@ -110,7 +110,27 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
   const [error, setError] = useState("");
   const [messages, setMessages] = useState<RideNotification[]>([]);
   const [unread, setUnread] = useState(0);
+  const [demoPhone, setDemoPhone] = useState<{ masked_number: string; in_use: boolean } | null>(null);
+  const [rollingPhone, setRollingPhone] = useState(false);
+  const [phoneError, setPhoneError] = useState("");
   const attemptRef = useRef<CallAttempt | null>(null);
+  useEffect(() => {
+    void fetch("/api/demo-phone", { cache: "no-store" })
+      .then(async response => { if (!response.ok) throw new Error("Unable to load demo number"); return response.json(); })
+      .then(setDemoPhone)
+      .catch(error => setPhoneError(error instanceof Error ? error.message : "Unable to load demo number"));
+  }, []);
+  const rollDemoPhone = async () => {
+    if (rollingPhone || demoPhone?.in_use) return;
+    setRollingPhone(true); setPhoneError("");
+    try {
+      const response = await fetch("/api/demo-phone", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "roll" }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "Unable to roll demo number");
+      setDemoPhone(body);
+    } catch (error) { setPhoneError(error instanceof Error ? error.message : "Unable to roll demo number"); }
+    finally { setRollingPhone(false); }
+  };
   const stopTune = useCallback((attempt: CallAttempt) => {
     attempt.tune.removeEventListener("ended", attempt.onTuneEnded);
     attempt.tune.removeEventListener("error", attempt.onTuneError);
@@ -134,7 +154,7 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
     const timer = setInterval(() => setSeconds(Math.floor((performance.now() - started) / 1000)), 1000);
     return () => clearInterval(timer);
   }, [demo.screen]);
-  const endCall = () => { dispose(); setControlsOpen(false); setMicrophoneListening(false); dispatch({ type: "call-ended" }); };
+  const endCall = () => { dispose(); setDemoPhone(value => value ? { ...value, in_use: false } : value); setControlsOpen(false); setMicrophoneListening(false); dispatch({ type: "call-ended" }); };
   const connect = async (number = demo.digits) => {
     if (normalizeDialedNumber(number) !== DEMO_NUMBER) { dispatch({ type: "invalid-number" }); return; }
     dispose(); setControlsOpen(false); setMuted(false); setMicrophoneListening(false); setRemoteVolume(1); setSeconds(0); setError("");
@@ -161,7 +181,7 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
         transport.setVolume(1);
         await transport.connect(attempt.abort.signal);
         if (attemptRef.current !== attempt) return;
-        setMicrophoneListening(true); dispatch({ type: "connected" });
+        setMicrophoneListening(true); setDemoPhone(value => value ? { ...value, in_use: true } : value); dispatch({ type: "connected" });
       } catch {
         if (attemptRef.current !== attempt) return;
         dispose(); setMicrophoneListening(false); setError("Please try your call again."); dispatch({ type: "call-error" });
@@ -199,6 +219,15 @@ function PhoneExperience({ createTransport }: { createTransport: () => CallTrans
         <li><span>03</span><div><strong>Speak naturally</strong><small>Allow microphone access</small></div></li>
       </ol>
       <p className="demo-language">Try: “Kal subah 8 baje station ke liye cab book kar do.”</p>
+      <div className="demo-number-roller" aria-live="polite">
+        <small>YOUR DEMO CALLER ID</small>
+        <strong>{demoPhone?.masked_number ?? "XXXXXX----"}</strong>
+        <button type="button" onClick={() => void rollDemoPhone()} disabled={!demoPhone || demoPhone.in_use || rollingPhone || callScreens.includes(demo.screen)}>
+          <ArrowClockwise weight="bold" /> {rollingPhone ? "Rolling…" : "Roll number"}
+        </button>
+        <span>{(demoPhone?.in_use || callScreens.includes(demo.screen)) ? "Locked while your call is active" : "Persists for your account until you roll it"}</span>
+        {phoneError && <span role="alert">{phoneError}</span>}
+      </div>
     </aside>
     <div className="demo-stage"><div className="phone-aura" aria-hidden="true"/>
       <PremiumPhone connected={connected} microphoneActive={connected && microphoneListening && !muted} controlsOpen={controlsOpen} onOpenControls={() => setControlsOpen(true)}>

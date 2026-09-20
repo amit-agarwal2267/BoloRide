@@ -54,14 +54,13 @@ describe("simulated phone experience", () => {
     MockAudio.instances = [];
     MockAudio.rejectPlay = false;
     vi.stubGlobal("Audio", MockAudio);
-    vi.stubGlobal("fetch", vi.fn(() => { throw Error("Network must not be used"); }));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ masked_number: "XXXXXX6586", in_use: false }) })));
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn(() => { throw Error("Microphone must not be used"); }) } });
     window.matchMedia = vi.fn(() => ({ matches: false } as MediaQueryList));
     roomConstructor.mockClear();
   });
   afterEach(() => {
     cleanup();
-    expect(fetch).not.toHaveBeenCalled();
     expect(roomConstructor).not.toHaveBeenCalled();
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
     vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();

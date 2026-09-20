@@ -393,11 +393,24 @@ def _caller_phone(
         return trusted_sip_caller_phone(
             getattr(ctx.room, "remote_participants", {}).values(), sip_trunk_id
         )
+    metadata = getattr(ctx.job, "metadata", None)
     if telephony_provider == "browser":
+        if isinstance(metadata, str) and metadata.strip():
+            try:
+                payload = json.loads(metadata)
+            except ValueError:
+                payload = {}
+            if (
+                isinstance(payload, dict)
+                and payload.get("transport") == "browser"
+                and payload.get("client") == "boloride-web-demo"
+            ):
+                value = payload.get("phone_number")
+                if isinstance(value, str) and value.strip():
+                    return value
         return browser_demo_phone
 
     # Console-only metadata supports disposable local text/microphone clients.
-    metadata = getattr(ctx.job, "metadata", None)
     if isinstance(metadata, str) and metadata.strip():
         try:
             payload = json.loads(metadata)
