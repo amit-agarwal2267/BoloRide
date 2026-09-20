@@ -2279,6 +2279,7 @@ class BoloRideAgent(Agent):
                     "The existing ride could not be cancelled safely, so the new "
                     "booking was not created."
                 )
+            self.ride_context.clear_cancellation()
             if (
                 cancellation.status is CancellationResultStatus.SUCCESS
                 and cancellation.ride is not None
