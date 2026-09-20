@@ -2175,13 +2175,22 @@ class BoloRideAgent(Agent):
             },
         )
         pricing = quote.pricing
+        estimated_total = pricing.estimated_total
+        if not isinstance(estimated_total, Decimal):
+            try:
+                estimated_total = Decimal(str(estimated_total))
+            except Exception:
+                return json.dumps({
+                    "status": "quote_unavailable",
+                    "message": "The fare estimate could not be represented safely.",
+                })
         toll_note = (
             " Tolls may be excluded and the final ride fare may vary."
             if pricing.toll_status.value in {"may_apply", "unknown"}
             else ""
         )
         return (
-            f"Estimated fare: {pricing.currency} {pricing.estimated_total:.0f}. "
+            f"Estimated fare: {pricing.currency} {estimated_total:.0f}. "
             f"This estimate is valid for 20 minutes and requires explicit confirmation."
             f"{toll_note}"
         )
