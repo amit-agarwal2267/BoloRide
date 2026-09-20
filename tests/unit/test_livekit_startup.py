@@ -176,6 +176,10 @@ def test_browser_mode_uses_only_server_owned_demo_identity() -> None:
     )
 
     assert _caller_phone(ctx, "+918888888888", "browser", None, "+917777777777") == "+917777777777"
+    ctx.job.metadata = '{"client":"boloride-web-demo","transport":"browser","phone_number":"+919880486586"}'
+    assert _caller_phone(ctx, "+918888888888", "browser", None, "+917777777777") == "+919880486586"
+    ctx.job.metadata = '{"transport":"browser","phone_number":"+919999999999"}'
+    assert _caller_phone(ctx, "+918888888888", "browser", None, "+917777777777") == "+917777777777"
     assert _caller_phone(ctx, "+918888888888", "browser") is None
 
 

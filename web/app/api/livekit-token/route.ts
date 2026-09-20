@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { authorizeDemoAccess } from "../../../lib/demo-access";
 import { issueDemoToken } from "../../../lib/livekit-token";
+import { endDemoPhoneCall, startDemoPhoneCall } from "../../../lib/demo-phone";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,7 +60,9 @@ export async function POST() {
     );
   }
 
+  let callLease: Awaited<ReturnType<typeof startDemoPhoneCall>> | null = null;
   try {
+    callLease = await startDemoPhoneCall(authorization);
     const credentials =
       await issueDemoToken({
         LIVEKIT_URL:
@@ -74,10 +77,10 @@ export async function POST() {
           process.env.LIVEKIT_API_SECRET,
         LIVEKIT_AGENT_NAME:
           process.env.LIVEKIT_AGENT_NAME,
-      });
+      }, callLease.phone_number);
 
     return NextResponse.json(
-      credentials,
+      { ...credentials, callId: callLease.call_id, maskedNumber: callLease.masked_number },
       {
         status: 201,
         headers: {
@@ -86,6 +89,9 @@ export async function POST() {
       },
     );
   } catch (error) {
+    if (callLease) {
+      await endDemoPhoneCall(authorization, callLease.call_id).catch(() => undefined);
+    }
     console.error(
       "[livekit-token] Failed to create token or dispatch agent:",
       error instanceof Error

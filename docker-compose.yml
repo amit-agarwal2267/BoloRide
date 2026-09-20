@@ -10,6 +10,7 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-boloride-dev}
+      BOLORIDE_API_URL: ${BOLORIDE_API_URL:-http://boloride:8000}
     ports:
       - "${WEB_DEMO_PORT:-3100}:3000"
     restart: unless-stopped

@@ -4,6 +4,12 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Home from "../app/page";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn(), back: vi.fn(), forward: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(),
+}));
 import PhoneDemo from "../components/PhoneDemo";
 import { PhoneClock, useClock } from "../components/PhoneClock";
 import { SIMULATED_CONNECTION_MS, SimulatedCallTransport, type RideNotification } from "../lib/call-transport";
@@ -54,14 +60,13 @@ describe("simulated phone experience", () => {
     MockAudio.instances = [];
     MockAudio.rejectPlay = false;
     vi.stubGlobal("Audio", MockAudio);
-    vi.stubGlobal("fetch", vi.fn(() => { throw Error("Network must not be used"); }));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ masked_number: "XXXXXX6586", in_use: false }) })));
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn(() => { throw Error("Microphone must not be used"); }) } });
     window.matchMedia = vi.fn(() => ({ matches: false } as MediaQueryList));
     roomConstructor.mockClear();
   });
   afterEach(() => {
     cleanup();
-    expect(fetch).not.toHaveBeenCalled();
     expect(roomConstructor).not.toHaveBeenCalled();
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
     vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
@@ -71,8 +76,9 @@ describe("simulated phone experience", () => {
     const view = render(<Home/>);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("A system");
     expect(screen.queryByTestId("lock-screen")).not.toBeInTheDocument();
-    const demoLinks = screen.getAllByRole("link").filter(link => link.getAttribute("href") === "/demo");
-    expect(demoLinks).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "Try the call" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Call BoloRide/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open the phone demo/i })).toBeInTheDocument();
     view.unmount(); render(<PhoneDemo/>);
     expect(screen.getByTestId("lock-screen")).toBeInTheDocument();
   });

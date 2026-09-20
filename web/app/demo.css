@@ -742,3 +742,22 @@
   .demo-experience .device-scene { zoom: .91; }
   .demo-experience .demo-stage { min-height: 700px; }
 }
+
+.demo-number-roller {
+  margin-top: 1.15rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 18px;
+  background: rgba(255,255,255,.055);
+  display: grid;
+  gap: .55rem;
+  max-width: 340px;
+}
+.demo-number-roller small { font-size: .68rem; letter-spacing: .14em; opacity: .62; }
+.demo-number-roller strong { font-size: 1.25rem; letter-spacing: .08em; }
+.demo-number-roller button {
+  width: fit-content; display: inline-flex; align-items: center; gap: .45rem;
+  border: 0; border-radius: 999px; padding: .58rem .85rem; cursor: pointer;
+}
+.demo-number-roller button:disabled { cursor: not-allowed; opacity: .45; }
+.demo-number-roller span { font-size: .72rem; opacity: .62; line-height: 1.4; }

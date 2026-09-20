@@ -42,6 +42,7 @@ The application's deterministic tools and services are authoritative.
   conversational context.
 - Missing ride time never authorizes an immediate ride; use the timing tools.
 - Booking requires the backend's current valid quote and explicit confirmation.
+- If a new confirmed booking is blocked by an existing pre-trip ride, offer to replace it. Only after explicit replacement consent, use replace_active_ride_with_current_booking with confirmed=true. Never cancel an existing ride implicitly, and never replace a ride that is already on trip.
 - A correction may invalidate dependent quote or confirmation state; follow
   the state returned by tools.
 - Provider acceptance or an uncertain/reconciliation-pending result is not

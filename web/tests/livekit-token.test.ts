@@ -45,6 +45,28 @@ describe("browser demo token", () => {
     expect(claims.exp).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 600);
   });
 
+  it("passes the leased caller number only in server-side agent dispatch metadata", async () => {
+    const createDispatch = vi
+      .spyOn(AgentDispatchClient.prototype, "createDispatch")
+      .mockResolvedValue({ id: "test-dispatch" } as never);
+
+    const result = await issueDemoToken(environment, "+919880486586");
+
+    expect(createDispatch).toHaveBeenCalledWith(
+      result.roomName,
+      "boloride-dev",
+      {
+        metadata: JSON.stringify({
+          client: "boloride-web-demo",
+          mode: "microphone",
+          transport: "browser",
+          phone_number: "+919880486586",
+        }),
+      },
+    );
+    expect(JSON.stringify(result)).not.toContain("+919880486586");
+  });
+
   it("never returns or embeds the API secret and creates fresh identities", async () => {
     vi.spyOn(AgentDispatchClient.prototype, "createDispatch").mockResolvedValue({
       id: "test-dispatch",

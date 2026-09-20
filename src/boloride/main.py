@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from boloride.api.routes.demo_access import router as demo_access_router
+from boloride.api.routes.demo_phone import router as demo_phone_router
 from boloride.api.routes.health import router as health_router
 from boloride.config import Settings, get_settings
 from boloride.db.session import create_database_engine, create_session_factory
@@ -85,6 +86,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.add_middleware(RequestIdMiddleware)
     application.include_router(health_router)
     application.include_router(demo_access_router)
+    application.include_router(demo_phone_router)
     return application
 
 

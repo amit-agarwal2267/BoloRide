@@ -2238,6 +2238,70 @@ class BoloRideAgent(Agent):
             f"{outcome.accepted_quote.pricing.estimated_total:.0f}. "
             "और किसी चीज़ में मदद चाहिए?"
         )
+    @function_tool
+    async def replace_active_ride_with_current_booking(
+        self,
+        confirmed: bool,
+        run_context: RunContext = None,  # type: ignore[assignment]
+    ) -> str:
+        """After the caller explicitly agrees, cancel the current pre-trip ride and book the already prepared new request."""
+        async with self._state_operation_lock:
+            user_id = self._verified_user()
+            if user_id is None:
+                return "Replacement rejected: customer identification is required."
+            active = await self._database_call(
+                lambda: self._rides.get_active_status_for_customer(user_id)
+            )
+            if active is None:
+                return await self._create_booking_locked(run_context)
+            if active.status.value == "on_trip":
+                return "The current ride is already on trip and cannot be replaced."
+            if not confirmed:
+                local_time = active.requested_ride_at.astimezone(self._timezone)
+                return (
+                    f"Replacement confirmation required: cancel the existing ride from "
+                    f"{active.pickup} to {active.destination} at "
+                    f"{local_time.strftime('%d %b, %I:%M %p')} and book the new ride?"
+                )
+
+            self.ride_context.select_cancellation_target(active.ride_id)
+            self.ride_context.record_cancellation_confirmation(active.ride_id, True)
+            cancellation = await self._database_call(
+                lambda: self._ride_service.cancel_customer_ride(
+                    user_id, active.ride_id, self.ride_context
+                )
+            )
+            if cancellation.status not in {
+                CancellationResultStatus.SUCCESS,
+                CancellationResultStatus.IDEMPOTENT_SUCCESS,
+            }:
+                return (
+                    "The existing ride could not be cancelled safely, so the new "
+                    "booking was not created."
+                )
+            self.ride_context.clear_cancellation()
+            if (
+                cancellation.status is CancellationResultStatus.SUCCESS
+                and cancellation.ride is not None
+            ):
+                details = cancellation.ride
+                await self._notifications.deliver(
+                    RideNotification(
+                        notification_id=uuid4(),
+                        type=RideNotificationType.RIDE_CANCELLED,
+                        sender=DEMO_NOTIFICATION_SENDER,
+                        ride_id=details.ride_id,
+                        timestamp=datetime.now(UTC),
+                        payload={
+                            "source": details.pickup,
+                            "destination": details.destination,
+                            "booking_time": details.requested_ride_at.isoformat(),
+                            "cancellation_time": datetime.now(UTC).isoformat(),
+                        },
+                    )
+                )
+            return await self._create_booking_locked(run_context)
+
     def _set_location(
         self, role: Literal["pickup", "destination"], location: ResolvedLocation
     ) -> None:

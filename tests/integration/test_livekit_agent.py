@@ -1628,6 +1628,29 @@ async def test_active_ride_booking_result_is_customer_safe() -> None:
 
 
 @pytest.mark.asyncio
+async def test_active_ride_can_be_explicitly_replaced_without_weakening_booking_guard() -> None:
+    agent, context, _ = make_agent()
+    active = ride_details("Old destination")
+    agent._rides.get_active_status_for_customer = AsyncMock(return_value=active)
+    agent._ride_service.cancel_customer_ride.return_value = CancellationResult(
+        CancellationResultStatus.SUCCESS, active
+    )
+    agent._create_booking_locked = AsyncMock(return_value="new ride booked")
+
+    prompt = await agent.replace_active_ride_with_current_booking(False)
+    assert "confirmation required" in prompt.casefold()
+    agent._ride_service.cancel_customer_ride.assert_not_awaited()
+    agent._create_booking_locked.assert_not_awaited()
+
+    result = await agent.replace_active_ride_with_current_booking(True)
+
+    assert result == "new ride booked"
+    agent._ride_service.cancel_customer_ride.assert_awaited_once()
+    agent._create_booking_locked.assert_awaited_once()
+    assert context.cancellation_target_ride_id is None
+
+
+@pytest.mark.asyncio
 async def test_successful_booking_emits_one_complete_demo_notification() -> None:
     delivered = []
 
