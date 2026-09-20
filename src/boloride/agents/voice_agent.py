@@ -564,6 +564,52 @@ class BoloRideAgent(Agent):
             missing.append("resolved_pickup")
         if self.ride_context.destination is None:
             missing.append("resolved_destination")
+
+        # A provider-backed location is not enough by itself: it must still agree
+        # with any geography the caller explicitly established for that endpoint.
+        # This is a hard quote boundary so an LLM/tool-ordering mistake cannot
+        # advance an unresolved Jaipur/Mumbai/Pune-style location to pricing.
+        geography_conflicts = []
+        for role, location in (
+            ("pickup", self.ride_context.pickup),
+            ("destination", self.ride_context.destination),
+        ):
+            if location is None:
+                continue
+            expected_city, expected_state = self.ride_context.endpoint_geography(role)
+            if (
+                expected_city
+                and location.city
+                and expected_city.casefold() != location.city.casefold()
+            ):
+                geography_conflicts.append(role)
+                continue
+            if (
+                expected_state
+                and location.state
+                and expected_state.casefold() != location.state.casefold()
+            ):
+                geography_conflicts.append(role)
+        if geography_conflicts:
+            self.ride_context.current_quote = None
+            self.ride_context.confirmed_quote_id = None
+            self.ride_context.user_confirmed = False
+            logger.info(
+                "quote_blocked_by_endpoint_geography",
+                extra={
+                    "event": "quote_blocked_by_endpoint_geography",
+                    "session_id": self.ride_context.session_id,
+                    "location_roles": geography_conflicts,
+                },
+            )
+            return json.dumps(
+                {
+                    "status": "quote_location_validation_failed",
+                    "invalid_locations": geography_conflicts,
+                    "instruction": "Do not quote or continue toward booking. Re-resolve each invalid endpoint using the caller's explicit geography.",
+                }
+            )
+
         if self.ride_context.ride_time is None:
             missing.append("ride_timing")
         if self.ride_context.passenger_count_source is not PassengerCountSource.USER_PROVIDED:
@@ -783,6 +829,11 @@ class BoloRideAgent(Agent):
             else self.ride_context.destination
         )
         if existing is not None and not correction:
+            if role == "pickup" and self.ride_context.pickup_precision_sufficient is False:
+                return json.dumps({
+                    "status": "precise_pickup_required",
+                    "instruction": "The current pickup is too broad. Ask for a landmark, building, society, station, or specific POI, then call search_locations again for pickup with correction=true.",
+                })
             logger.info(
                 "location_resolved_reuse",
                 extra={
@@ -934,6 +985,14 @@ class BoloRideAgent(Agent):
             )
             return json.dumps({"status": "stale_location_result_ignored"})
         if result.status is LocationResolutionStatus.RESOLVED and result.location:
+            if role == "destination" and context_city and result.location.city and result.location.city.casefold() != context_city.casefold():
+                self._record_clarification("location", location=True)
+                return json.dumps({
+                    "status": "location_clarification_required",
+                    "location_role": role,
+                    "reason": "resolved_candidate_outside_explicit_geography",
+                    "instruction": f"The result is outside {context_city}. Keep {context_city} as the destination geography and ask for a more specific place there.",
+                })
             selected, changed = await self._store_resolved_location(
                 role, result.location, correction=correction
             )

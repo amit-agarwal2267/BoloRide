@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import contextmanager
 from time import monotonic
@@ -89,30 +90,68 @@ class MapsRouter:
     async def search_location(
         self, query: str, context: LocationSearchContext
     ) -> tuple[list[LocationCandidate], str | None, bool, bool]:
-        failures = 0
+        """Search every configured geocoder concurrently and return at most 3 per provider."""
         providers = self.get_search_providers()
-        for index, provider in enumerate(providers):
-            if index == 1:
-                self.record_fallback_attempt()
-            with self.provider_observation(provider.provider_name, "location_search", index + 1) as observation:
+        if not providers:
+            return [], None, False, False
+
+        async def search(provider: MapsProvider, attempt_order: int):
+            with self.provider_observation(
+                provider.provider_name, "location_search", attempt_order
+            ) as observation:
                 started_at = monotonic()
                 try:
                     candidates = await provider.search_location(query, context)
                 except LocationProviderError:
-                    failures += 1
                     if observation is not None:
-                        observation.update(metadata={"provider": provider.provider_name, "operation": "location_search", "attempt_order": index + 1, "success": False, "failure_category": "provider_unavailable", "duration_ms": (monotonic() - started_at) * 1000})
-                    if index == 0:
-                        logger.warning("maps_primary_failed", extra={"event": "maps_primary_failed", "provider": provider.provider_name})
-                    continue
+                        observation.update(
+                            metadata={
+                                "provider": provider.provider_name,
+                                "operation": "location_search",
+                                "attempt_order": attempt_order,
+                                "success": False,
+                                "failure_category": "provider_unavailable",
+                                "duration_ms": (monotonic() - started_at) * 1000,
+                            }
+                        )
+                    logger.warning(
+                        "maps_search_provider_failed",
+                        extra={
+                            "event": "maps_search_provider_failed",
+                            "provider": provider.provider_name,
+                        },
+                    )
+                    return provider.provider_name, [], True
+                limited = candidates[:3]
                 if observation is not None:
-                    observation.update(metadata={"provider": provider.provider_name, "operation": "location_search", "attempt_order": index + 1, "success": bool(candidates), "candidate_count": len(candidates), "duration_ms": (monotonic() - started_at) * 1000})
-            if candidates:
-                if index > 0:
-                    logger.info("maps_fallback_used", extra={"event": "maps_fallback_used", "provider": provider.provider_name})
-                return candidates, provider.provider_name, index > 0, False
-            # A genuine no-result may still be provider-specific, so try fallback.
-        return [], None, False, bool(providers) and failures == len(providers)
+                    observation.update(
+                        metadata={
+                            "provider": provider.provider_name,
+                            "operation": "location_search",
+                            "attempt_order": attempt_order,
+                            "success": bool(limited),
+                            "candidate_count": len(limited),
+                            "duration_ms": (monotonic() - started_at) * 1000,
+                        }
+                    )
+                return provider.provider_name, limited, False
+
+        results = await asyncio.gather(
+            *(search(provider, index + 1) for index, provider in enumerate(providers))
+        )
+        combined: list[LocationCandidate] = []
+        failures = 0
+        successful_providers: list[str] = []
+        for provider_name, candidates, failed in results:
+            if failed:
+                failures += 1
+                continue
+            successful_providers.append(provider_name)
+            combined.extend(candidates)
+
+        provider_label = "+".join(successful_providers) or None
+        unavailable = failures == len(providers)
+        return combined, provider_label, False, unavailable
 
     async def get_route(
         self, origin: ResolvedLocation, destination: ResolvedLocation

@@ -39,7 +39,7 @@ class GoogleMapsProvider:
         self._owns_client = client is None
 
     async def search_location(self, query: str, context: LocationSearchContext | None = None) -> list[LocationCandidate]:
-        body: dict[str, Any] = {"textQuery": contextual_query(query, context), "pageSize": min(self._limit, 20)}
+        body: dict[str, Any] = {"textQuery": contextual_query(query, context), "pageSize": min(self._limit, 3)}
         if context and context.language:
             body["languageCode"] = context.language
         if context and context.country:

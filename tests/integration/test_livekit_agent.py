@@ -1371,6 +1371,40 @@ async def test_cheapest_vehicle_uses_backend_price_previews_without_quote() -> N
 
 
 @pytest.mark.asyncio
+async def test_quote_is_blocked_when_resolved_destination_conflicts_with_explicit_city() -> None:
+    agent, context, _ = make_agent()
+    context.update_pickup(
+        ResolvedLocation(
+            "Jaipur Junction",
+            Decimal("26.92"),
+            Decimal("75.79"),
+            city="Jaipur",
+            state="Rajasthan",
+        )
+    )
+    context.remember_endpoint_geography("pickup", "Jaipur", "Rajasthan")
+    context.update_destination(
+        ResolvedLocation(
+            "Jaipur to Delhi cabs",
+            Decimal("26.91"),
+            Decimal("75.80"),
+            city="Jaipur",
+            state="Rajasthan",
+        )
+    )
+    context.remember_endpoint_geography("destination", "Delhi", "Delhi")
+    context.update_ride_time(datetime.now(UTC))
+    await agent.select_vehicle_category("auto")
+
+    result = json.loads(await agent.create_fare_quote())
+
+    assert result["status"] == "quote_location_validation_failed"
+    assert result["invalid_locations"] == ["destination"]
+    agent._quotes.create_quote.assert_not_awaited()
+    assert context.current_quote is None
+
+
+@pytest.mark.asyncio
 async def test_suspicious_route_returns_structured_quote_block() -> None:
     from boloride.domain.exceptions import RouteSanityError
 
@@ -1518,6 +1552,62 @@ def test_location_context_precedence_ends_in_unknown_geography() -> None:
         "pickup", None, None
     )
     assert (city, state, source.value) == (None, None, "unavailable")
+
+
+@pytest.mark.asyncio
+async def test_broad_pickup_requires_refinement_search_instead_of_reuse() -> None:
+    agent, context, _ = make_agent()
+    context.update_pickup(
+        ResolvedLocation(
+            "Malad",
+            Decimal("19.18"),
+            Decimal("72.84"),
+            city="Mumbai",
+            place_types=("locality",),
+        ),
+        precision_sufficient=False,
+    )
+    agent._locations.resolve_query = AsyncMock()
+
+    result = json.loads(await agent.search_locations("Malad", "pickup"))
+
+    assert result["status"] == "precise_pickup_required"
+    assert "correction=true" in result["instruction"]
+    agent._locations.resolve_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_destination_result_outside_explicit_city_is_rejected() -> None:
+    agent, context, _ = make_agent()
+    agent._locations.resolve_query = AsyncMock(
+        return_value=SimpleNamespace(
+            status=LocationResolutionStatus.RESOLVED,
+            location=ResolvedLocation(
+                "Mumbai to pune cabs, Dadar East, Mumbai",
+                Decimal("19.01"),
+                Decimal("72.84"),
+                display_name="Mumbai to pune cabs",
+                city="Mumbai",
+                state="Maharashtra",
+                place_types=("establishment",),
+            ),
+            provider="ola",
+            fallback_used=False,
+            candidates=(),
+        )
+    )
+
+    result = json.loads(
+        await agent.search_locations(
+            "Pune",
+            "destination",
+            explicit_city="Pune",
+        )
+    )
+
+    assert result["status"] == "location_clarification_required"
+    assert result["reason"] == "resolved_candidate_outside_explicit_geography"
+    assert context.destination is None
 
 
 @pytest.mark.asyncio

@@ -57,7 +57,7 @@ class OlaMapsProvider:
         items: object = payload.get("predictions", payload.get("results", [])) if isinstance(payload, Mapping) else []
         if not isinstance(items, list):
             raise LocationProviderError("Ola Maps returned an invalid results list")
-        return [candidate for item in items if (candidate := self._candidate(item)) is not None]
+        return [candidate for item in items if (candidate := self._candidate(item)) is not None][:3]
 
     def _candidate(self, item: object) -> LocationCandidate | None:
         if not isinstance(item, Mapping):

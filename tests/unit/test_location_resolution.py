@@ -117,7 +117,7 @@ async def test_google_provider_normalizes_response_and_context() -> None:
     assert candidates[0].latitude == Decimal("25.2138")
     assert client.calls[0]["json"] == {
         "textQuery": "Kota railway station, Kota, Rajasthan, in",
-        "pageSize": 5,
+        "pageSize": 3,
         "languageCode": "en",
         "regionCode": "IN",
     }
@@ -250,6 +250,140 @@ async def test_resolve_query_collapses_strong_duplicate_candidates() -> None:
     assert result.status is LocationResolutionStatus.RESOLVED
     assert result.location is not None
     assert result.location.provider_place_id == "same-place"
+
+
+@pytest.mark.asyncio
+async def test_cross_provider_consensus_auto_resolves_same_place() -> None:
+    ola = LocationCandidate(
+        "Durgapura Railway Station",
+        "Durgapura Railway Station, Jaipur, Rajasthan",
+        Decimal("26.8520"),
+        Decimal("75.7860"),
+        "ola",
+        "ola-durgapura",
+        city="Jaipur",
+        state="Rajasthan",
+        country="India",
+        place_types=("train_station",),
+    )
+    google = LocationCandidate(
+        "Durgapura",
+        "Durgapura Railway Station, Jaipur, Rajasthan, India",
+        Decimal("26.8521"),
+        Decimal("75.7861"),
+        "google",
+        "google-durgapura",
+        city="Jaipur",
+        state="Rajasthan",
+        country="India",
+        place_types=("train_station",),
+    )
+
+    class Provider:
+        def __init__(self, name):
+            self.provider_name = name
+
+        async def enrich_candidate(self, candidate):
+            return candidate
+
+    class Router:
+        async def search_location(self, query, context):
+            return [ola, google], "ola+google", False, False
+
+        def get_search_providers(self):
+            return [Provider("ola"), Provider("google")]
+
+        def get_provider(self):
+            return Provider("ola")
+
+    result = await LocationService(Router()).resolve_query(  # type: ignore[arg-type]
+        "Durgapura Railway Station", city="Jaipur", state="Rajasthan"
+    )
+
+    assert result.status is LocationResolutionStatus.RESOLVED
+    assert result.location is not None
+    assert result.location.city == "Jaipur"
+    assert result.provider == "consensus"
+
+
+@pytest.mark.asyncio
+async def test_partial_provider_matches_require_confirmation_and_expose_at_most_three() -> None:
+    names = (
+        "Radiant Clinic",
+        "Signature Hospital",
+        "City Railway Station",
+        "Aari Skin Centre",
+        "World Trade Park",
+        "Sindhi Camp Bus Stand",
+    )
+    values = [
+        LocationCandidate(
+            name,
+            f"{name}, Jaipur, Rajasthan",
+            Decimal("26.80") + Decimal(index) / Decimal("25"),
+            Decimal("75.70") + Decimal(index) / Decimal("25"),
+            "ola" if index < 3 else "google",
+            f"place-{index}",
+            city="Jaipur",
+            state="Rajasthan",
+        )
+        for index, name in enumerate(names)
+    ]
+
+    class Router:
+        async def search_location(self, query, context):
+            return values, "ola+google", False, False
+
+        def get_search_providers(self):
+            return []
+
+        def get_provider(self):
+            raise AssertionError("ambiguous candidates must not be auto-resolved")
+
+    result = await LocationService(Router()).resolve_query(  # type: ignore[arg-type]
+        "Jaipur", city="Jaipur", state="Rajasthan"
+    )
+
+    assert result.status is LocationResolutionStatus.CLARIFICATION_REQUIRED
+    assert 1 <= len(result.candidates) <= 3
+
+
+@pytest.mark.asyncio
+async def test_maps_router_queries_both_search_providers_and_caps_each_to_three() -> None:
+    calls = []
+
+    class Provider:
+        def __init__(self, name):
+            self.provider_name = name
+
+        async def search_location(self, query, context):
+            calls.append(self.provider_name)
+            return [
+                LocationCandidate(
+                    f"{self.provider_name}-{index}",
+                    f"{self.provider_name}-{index}, Jaipur",
+                    Decimal("26.9"),
+                    Decimal("75.8") + Decimal(index) / Decimal("100"),
+                    self.provider_name,
+                    f"{self.provider_name}-{index}",
+                    city="Jaipur",
+                )
+                for index in range(5)
+            ]
+
+    router = MapsRouter(settings())
+    router._route_providers = [Provider("ola"), Provider("google")]  # type: ignore[assignment]
+
+    candidates, provider, fallback, unavailable = await router.search_location(
+        "station", LocationSearchContext(city="Jaipur")
+    )
+
+    assert set(calls) == {"ola", "google"}
+    assert len([item for item in candidates if item.provider == "ola"]) == 3
+    assert len([item for item in candidates if item.provider == "google"]) == 3
+    assert provider == "ola+google"
+    assert fallback is False
+    assert unavailable is False
 
 
 @pytest.mark.asyncio
