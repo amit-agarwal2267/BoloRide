@@ -72,3 +72,16 @@ class VehicleService:
             source,
             selected_vehicle_is_eligible=selected_vehicle_is_eligible,
         )
+
+
+VEHICLE_CATEGORY_EXAMPLES: dict[str, tuple[str, ...]] = {
+    "auto": ("Bajaj RE", "TVS King"),
+    "mini": ("Maruti Suzuki Wagon R", "Maruti Suzuki Swift", "Tata Tiago"),
+    "sedan": ("Maruti Suzuki Dzire", "Hyundai Aura", "Honda Amaze"),
+    "premium": ("Honda City", "Hyundai Verna", "Skoda Slavia"),
+    "suv": ("Toyota Innova", "Maruti Suzuki Ertiga", "Mahindra Marazzo"),
+}
+
+
+def vehicle_category_examples(code: str) -> tuple[str, ...]:
+    return VEHICLE_CATEGORY_EXAMPLES.get(code.strip().casefold(), ())

@@ -59,7 +59,7 @@ from boloride.services.dispatch_service import DispatchService
 from boloride.services.saved_place_service import SavedPlaceService
 from boloride.services.time_resolution_service import TimeResolutionService
 from boloride.services.user_service import UserService
-from boloride.services.vehicle_service import VehicleService
+from boloride.services.vehicle_service import VehicleService, vehicle_category_examples
 from boloride.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -1534,7 +1534,7 @@ class BoloRideAgent(Agent):
             },
         )
         if explicitly_confirmed:
-            return "Cancellation confirmed for the selected ride."
+            return json.dumps({"status": "cancellation_authorized", "cancelled": False, "next_action": "cancel_selected_ride", "selection_kind": "single"})
         return "Cancellation declined. The ride was not changed."
 
     @function_tool
@@ -1780,6 +1780,32 @@ class BoloRideAgent(Agent):
                 "live_driver_availability": "not_checked_until_dispatch",
             }
         )
+
+    @function_tool
+    async def get_vehicle_category_details(self, vehicle_type_code: str) -> str:
+        """Explain one canonical vehicle category using backend-owned representative model examples without selecting it."""
+        if self._verified_user() is None:
+            return json.dumps({"status": "identity_required"})
+        if self._vehicles is None:
+            return json.dumps({"status": "vehicle_catalog_unavailable"})
+        try:
+            vehicle = await self._database_call(
+                lambda: self._vehicles.require_eligible_vehicle_type(
+                    vehicle_type_code, self.ride_context.passenger_count
+                )
+            )
+        except DomainValidationError as exc:
+            return json.dumps({"status": "vehicle_not_eligible", "message": str(exc)})
+        return json.dumps({
+            "status": "vehicle_category_details",
+            "vehicle_type_code": vehicle.code,
+            "display_name": vehicle.display_name,
+            "passenger_capacity": vehicle.passenger_capacity,
+            "example_models": list(vehicle_category_examples(vehicle.code)[:3]),
+            "examples_are_representative": True,
+            "exact_model_guaranteed": False,
+            "selection_changed": False,
+        })
 
     @function_tool
     async def set_passenger_count(self, passenger_count: int) -> str:

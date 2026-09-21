@@ -7,7 +7,7 @@ const jakarta = Plus_Jakarta_Sans({ subsets: ["latin"], variable: "--font-jakart
 const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "BoloRide — Just say where",
+  title: "BoloRide",
   description: "A voice-first cab-booking experience built for natural Indian conversations.",
 };
 

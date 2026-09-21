@@ -794,7 +794,10 @@ async def test_cancellation_uses_natural_reference_and_internal_target() -> None
 
     assert str(details.ride_id) not in selected
     assert context.cancellation_target_ride_id == details.ride_id
-    assert "confirmed" in confirmed.casefold()
+    confirmation = json.loads(confirmed)
+    assert confirmation["status"] == "cancellation_authorized"
+    assert confirmation["cancelled"] is False
+    assert confirmation["next_action"] == "cancel_selected_ride"
 
 
 @pytest.mark.asyncio
@@ -2004,3 +2007,43 @@ async def test_hindi_anchor_and_english_provider_city_are_not_contradiction() ->
     assert result.startswith("Selected destination")
     assert context.destination is not None
     assert context.destination.city == "Kota"
+
+
+@pytest.mark.asyncio
+async def test_vehicle_category_details_are_backend_grounded_and_read_only() -> None:
+    agent, context, _ = make_agent()
+    context.passenger_count = 4
+
+    result = json.loads(await agent.get_vehicle_category_details("mini"))
+
+    assert result["status"] == "vehicle_category_details"
+    assert result["vehicle_type_code"] == "mini"
+    assert result["example_models"] == [
+        "Maruti Suzuki Wagon R",
+        "Maruti Suzuki Swift",
+        "Tata Tiago",
+    ]
+    assert result["selection_changed"] is False
+    assert context.selected_vehicle_type_code is None
+
+
+def test_runtime_invariants_cover_vehicle_explanation_and_contextual_gaadi() -> None:
+    from boloride.agents.instructions import RUNTIME_INVARIANTS
+
+    assert "मुझे गाड़ी चाहिए" in RUNTIME_INVARIANTS
+    assert "get_vehicle_category_details" in RUNTIME_INVARIANTS
+    assert "must not select a vehicle category" in RUNTIME_INVARIANTS.lower()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_confirmation_authorizes_but_does_not_claim_cancelled() -> None:
+    agent, context, _ = make_agent()
+    ride_id = uuid4()
+    context.select_cancellation_target(ride_id)
+
+    result = json.loads(await agent.record_cancellation_confirmation(True))
+
+    assert result["status"] == "cancellation_authorized"
+    assert result["cancelled"] is False
+    assert result["next_action"] == "cancel_selected_ride"
+    assert context.cancellation_is_confirmed_for(ride_id)

@@ -29,7 +29,7 @@ export default function Home() {
     <section className="aura-hero">
       <div className="hero-intro">
         <p className="mono-kicker"><span />VOICE-FIRST MOBILITY · INDIA</p>
-        <h1>A system,<br />built for <em>convenience.</em></h1>
+        <h1><span>A system,</span><span>built for <em>convenience.</em></span></h1>
         <p className="hero-lede">Call. Say where you need to go. BoloRide handles the rest through a natural conversation in Hindi, Hinglish, or English.</p>
         <div className="hero-ctas">
           {/* <Link className="button button--red" href="/demo"><Phone weight="fill" /> Call BoloRide</Link> */}

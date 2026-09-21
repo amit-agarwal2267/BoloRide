@@ -283,7 +283,7 @@ a:focus-visible,
   margin: 0;
   max-width: 720px;
   font-weight: 750;
-  font-size: clamp(3.35rem, 6vw, 6.7rem);
+  font-size: clamp(3.35rem, 6.5vw, 6.7rem);
   line-height: 0.98;
   letter-spacing: -0.075em;
   color: #f5f3eb;
@@ -2575,7 +2575,8 @@ a:focus-visible,
 .hero-intro { display: flex; flex-direction: column; justify-content: center; padding: 30px 0 20px 3vw; }
 .mono-kicker { display: flex; align-items: center; gap: 10px; margin: 0 0 24px; color: #4b5563; font: 650 .68rem/1 var(--font-mono), monospace; letter-spacing: .12em; }
 .mono-kicker span { width: 28px; height: 2px; background: var(--red); }
-.hero-intro h1 { margin: 0; max-width: 750px; color: #0f1013; font-size: clamp(4.4rem, 7.2vw, 8rem); font-weight: 530; line-height: 1.1; letter-spacing: -.075em; }
+.hero-intro h1 { margin: 0; width: min(100%, 620px); max-width: 620px; color: #0f1013; font-size: clamp(4.1rem, 6.2vw, 6.9rem); font-weight: 530; line-height: 1.1; letter-spacing: -.075em; }
+.hero-intro h1 > span { display: block; }
 .hero-intro h1 em { display: inline-block; color: var(--purple); font-style: normal; }
 .hero-lede { max-width: 620px; margin: 34px 0 30px; color: #4b5563; font-size: clamp(1rem, 1.25vw, 1.16rem); line-height: 1.75; }
 .hero-ctas { display: flex; align-items: center; gap: 28px; }
@@ -2678,7 +2679,7 @@ a:focus-visible,
   .aura-nav-links { display: none; }
   .aura-hero { grid-template-columns: 1fr; padding: 56px 18px 70px; }
   .hero-intro { padding: 0; }
-  .hero-intro h1 { font-size: clamp(3.7rem, 14vw, 6.5rem); }
+  .hero-intro h1 { width: 100%; max-width: 620px; font-size: clamp(3.7rem, 14vw, 6.5rem); }
   .hero-visual { min-height: 610px; }
   .route-ticket { left: 12px; }
   .section-heading, .section-heading--row { grid-template-columns: 1fr; }
