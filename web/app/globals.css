@@ -283,7 +283,7 @@ a:focus-visible,
   margin: 0;
   max-width: 720px;
   font-weight: 750;
-  font-size: clamp(3.35rem, 6.5vw, 6.7rem);
+  font-size: clamp(3.35rem, 6vw, 6.7rem);
   line-height: 0.98;
   letter-spacing: -0.075em;
   color: #f5f3eb;
