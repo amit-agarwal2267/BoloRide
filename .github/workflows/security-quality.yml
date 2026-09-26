@@ -1,0 +1,229 @@
+name: Security and Quality
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: security-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  approval:
+    name: Owner approval gate
+    runs-on: ubuntu-latest
+    environment: ci-approval
+    timeout-minutes: 5
+    steps:
+      - name: CI authorized
+        run: echo "Security and quality checks authorized."
+
+  hygiene:
+    name: Repository hygiene
+    needs: approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Reject tracked environment and key files
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad_env_files="$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$' || true)"
+          if [[ -n "${bad_env_files}" ]]; then
+            echo "Tracked environment files are not allowed:"
+            echo "${bad_env_files}"
+            exit 1
+          fi
+          bad_key_files="$(git ls-files | grep -Ei '\.(pem|key|p12|pfx|jks|keystore)$' || true)"
+          if [[ -n "${bad_key_files}" ]]; then
+            echo "Potential private-key or keystore files are tracked:"
+            echo "${bad_key_files}"
+            exit 1
+          fi
+
+      - name: Reject merge-conflict markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE '^(<<<<<<< |>>>>>>> )' -- .; then
+            echo "Merge-conflict markers found."
+            exit 1
+          fi
+
+      - name: Reject unexpectedly large files
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r -d '' file; do
+            [[ -f "${file}" ]] || continue
+            size=$(stat -c '%s' "${file}")
+            if (( size > 5242880 )); then
+              echo "Tracked file exceeds 5 MiB: ${file} (${size} bytes)"
+              found=1
+            fi
+          done < <(git ls-files -z)
+          exit "${found}"
+
+      - name: Check whitespace errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}...HEAD"
+          else
+            git diff --check HEAD^..HEAD
+          fi
+
+  gitleaks:
+    name: Secret scan (Gitleaks)
+    needs: approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  trufflehog:
+    name: Secret scan (TruffleHog)
+    needs: approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository
+        uses: trufflesecurity/trufflehog@466da5b0bb161144f6afca9afe5d57975828c410
+        with:
+          path: ./
+          extra_args: --no-update
+
+  python-quality:
+    name: Python quality
+    needs: approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.12.7"
+          enable-cache: true
+
+      - name: Ruff lint
+        run: uvx ruff check src tests
+
+  dependencies:
+    name: Dependency audit
+    needs: approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.12.7"
+          enable-cache: true
+
+      - name: Audit Python dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt --output-file /tmp/requirements.txt
+          uvx pip-audit --requirement /tmp/requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Audit web dependencies
+        working-directory: web
+        run: npm audit --audit-level=high
+
+  web-build:
+    name: Web production build
+    needs: approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Production build
+        working-directory: web
+        env:
+          BOLORIDE_API_URL: http://127.0.0.1:8000
+          NEXT_PUBLIC_SUPABASE_URL: https://example.invalid
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-placeholder
+        run: npm run build
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    needs: approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - python
+          - javascript-typescript
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1190a975f95ce23525efb6a3fc21ea29567c1b52
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52
+        with:
+          category: "/language:${{ matrix.language }}"

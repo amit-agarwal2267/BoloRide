@@ -1,0 +1,3 @@
+# Require the repository owner to review every change.
+# Pair this with "Require review from Code Owners" in the main-branch ruleset.
+* @amit-agarwal2267
