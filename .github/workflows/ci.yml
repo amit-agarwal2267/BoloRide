@@ -7,9 +7,9 @@ on:
       - main
       - "fix/**"
       - "boloride-hotfix"
-  pull_request:
-    branches:
-      - main
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Create CI environment
         shell: bash
@@ -50,6 +50,7 @@ jobs:
       - name: Wait for application readiness
         shell: bash
         run: |
+          set -euo pipefail
           ready=false
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error http://localhost:8000/health/ready; then
@@ -59,7 +60,7 @@ jobs:
             echo "Waiting for BoloRide readiness (${attempt}/60)..."
             sleep 2
           done
-          if [[ "$ready" != "true" ]]; then
+          if [[ "${ready}" != "true" ]]; then
             echo "BoloRide did not become ready within 120 seconds."
             exit 1
           fi
