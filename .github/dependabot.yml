@@ -5,26 +5,28 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     groups:
-      python-runtime:
-        dependency-type: "production"
-      python-development:
-        dependency-type: "development"
+      python:
+        patterns:
+          - "*"
 
   - package-ecosystem: "npm"
     directory: "/web"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     groups:
-      web-runtime:
-        dependency-type: "production"
-      web-development:
-        dependency-type: "development"
+      web:
+        patterns:
+          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns:
+          - "*"
