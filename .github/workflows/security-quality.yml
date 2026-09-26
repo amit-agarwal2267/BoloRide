@@ -18,7 +18,7 @@ jobs:
     name: Owner approval gate
     runs-on: ubuntu-latest
     environment: ci-approval
-    timeout-minutes: 5
+    timeout-minutes: 360
     steps:
       - name: CI authorized
         run: echo "Security and quality checks authorized."
@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
 
@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            git diff --check "${{ github.event.pull_request.base.sha }}...HEAD"
+            git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"
           else
             git diff --check HEAD^..HEAD
           fi
@@ -92,7 +92,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out full history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
 
@@ -109,7 +109,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out full history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
 
@@ -117,7 +117,7 @@ jobs:
         uses: trufflesecurity/trufflehog@466da5b0bb161144f6afca9afe5d57975828c410
         with:
           path: ./
-          extra_args: --no-update
+          version: "3.90.8"
 
   python-quality:
     name: Python quality
@@ -126,16 +126,37 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
           version: "0.12.7"
           enable-cache: true
 
-      - name: Ruff lint
-        run: uvx ruff check src tests
+      - name: Lint and format changed Python files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            mapfile -t files < <(git diff --name-only --diff-filter=ACMR "${base}...${head}" -- '*.py')
+          else
+            mapfile -t files < <(git ls-files '*.py')
+          fi
+
+          if (( ${#files[@]} == 0 )); then
+            echo "No Python files to check."
+            exit 0
+          fi
+
+          printf 'Checking %s\n' "${files[@]}"
+          uvx ruff check "${files[@]}"
+          uvx ruff format --check "${files[@]}"
 
   dependencies:
     name: Dependency audit
@@ -144,10 +165,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
           version: "0.12.7"
           enable-cache: true
@@ -177,7 +198,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -189,6 +210,14 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: npm ci
+
+      - name: Run web unit tests
+        working-directory: web
+        run: npm test
+
+      - name: Run TypeScript typecheck
+        working-directory: web
+        run: npm run typecheck
 
       - name: Production build
         working-directory: web
@@ -215,7 +244,7 @@ jobs:
           - javascript-typescript
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@1190a975f95ce23525efb6a3fc21ea29567c1b52
@@ -227,3 +256,95 @@ jobs:
         uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52
         with:
           category: "/language:${{ matrix.language }}"
+
+  test:
+    name: test
+    needs:
+      - hygiene
+      - gitleaks
+      - trufflehog
+      - python-quality
+      - dependencies
+      - web-build
+      - codeql
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Create CI environment
+        shell: bash
+        run: |
+          cat > .env <<'EOF'
+          APP_ENV=test
+          APP_PORT=8000
+          POSTGRES_DB=boloride
+          POSTGRES_USER=boloride
+          POSTGRES_PASSWORD=ci-only-postgres-password
+          DATABASE_URL=postgresql+asyncpg://boloride:ci-only-postgres-password@postgres:5432/boloride
+          LANGFUSE_ENABLED=false
+          LIVEKIT_URL=ws://livekit-server:7880
+          LIVEKIT_API_KEY=ci-only-livekit-key
+          LIVEKIT_API_SECRET=ci-only-livekit-secret-not-a-real-credential
+          LLM_PRIMARY_PROVIDER=google
+          LLM_PRIMARY_MODEL=ci-only-google-primary-model
+          LLM_FALLBACK_1_PROVIDER=google
+          LLM_FALLBACK_1_MODEL=ci-only-google-fallback-model
+          LLM_FALLBACK_2_PROVIDER=groq
+          LLM_FALLBACK_2_MODEL=ci-only-groq-fallback-model
+          GOOGLE_API_KEY=ci-only-google-api-key-not-a-secret
+          GROQ_API_KEY=ci-only-groq-api-key-not-a-secret
+          EOF
+
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+
+      - name: Build and start Docker Compose services
+        run: docker compose up -d --build
+
+      - name: Wait for application readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error http://localhost:8000/health/ready; then
+              ready=true
+              break
+            fi
+            echo "Waiting for BoloRide readiness (${attempt}/60)..."
+            sleep 2
+          done
+          if [[ "${ready}" != "true" ]]; then
+            echo "BoloRide did not become ready within 120 seconds."
+            exit 1
+          fi
+
+      - name: Require exactly one Alembic head
+        shell: bash
+        run: |
+          set -euo pipefail
+          heads="$(docker compose exec -T boloride uv run alembic heads)"
+          echo "${heads}"
+          count="$(printf '%s\n' "${heads}" | grep -c '(head)' || true)"
+          if [[ "${count}" -ne 1 ]]; then
+            echo "Expected exactly one Alembic head, found ${count}."
+            exit 1
+          fi
+
+      - name: Run database migrations
+        run: docker compose exec -T boloride uv run alembic upgrade head
+
+      - name: Run full Python test suite
+        run: docker compose exec -T boloride uv run pytest
+
+      - name: Print Docker diagnostics
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --no-color
+
+      - name: Clean up Docker Compose resources
+        if: always()
+        run: docker compose down --volumes --remove-orphans
