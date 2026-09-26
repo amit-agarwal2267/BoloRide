@@ -114,7 +114,7 @@ jobs:
           fetch-depth: 0
 
       - name: Scan repository
-        uses: trufflesecurity/trufflehog@466da5b0bb161144f6afca9afe5d57975828c410
+        uses: trufflesecurity/trufflehog@a5f3de55cc2065ae4dde8fee24076f137fd62fcf
         with:
           path: ./
           extra_args: --no-update
