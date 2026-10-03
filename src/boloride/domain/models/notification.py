@@ -1,12 +1,21 @@
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-
 DEMO_NOTIFICATION_SENDER = "BR24IC42"
+
+
+class NotificationDeliveryStatus(StrEnum):
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationDeliveryResult:
+    status: NotificationDeliveryStatus
 
 
 class RideNotificationType(StrEnum):
